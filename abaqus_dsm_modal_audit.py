@@ -335,20 +335,20 @@ def proxy_geometry(base, enhanced, odb, metadata):
 
 
 def proxy_percentages(weighted_coefficients, projector, cap, subspace=False):
-    y = np.asarray(weighted_coefficients)
+    """Rotation-invariant trace shares for the anchor-driven L/D/G split."""
+    y = np.asarray(weighted_coefficients, dtype=float)
     if y.ndim == 1:
         y = y[:, None]
     if subspace:
         y = orth(y)
-    total = float(np.sum(y*y))
-    if total <= 1e-250:
+    if not y.size:
         return [0., 0., 0.]
-    y = y.reshape(cap, len(projector.sqrtw), -1)
-    g = np.einsum('hdk,dp->hpk', y, projector.qglobal)
-    d = np.einsum('hdk,dp->hpk', y, projector.qdist)
-    residual = y-np.einsum('hpk,dp->hdk', g, projector.qglobal)-np.einsum('hpk,dp->hdk', d, projector.qdist)
-    values = np.array([np.sum(residual**2), np.sum(d**2), np.sum(g**2)])
-    return (100*values/values.sum()).tolist()
+    accum = np.zeros(3)
+    for j in range(y.shape[1]):
+        parts = projector.audit_components(y[:, j])
+        for k in range(3):
+            accum[k] += float(np.sum(parts[k]**2))
+    return (100*accum/max(float(accum.sum()), 1e-250)).tolist()
 
 
 def close_clusters(rows, tolerance):
@@ -585,6 +585,8 @@ def process(args):
         limitations=['Not a classical signature curve or an automatic cFSM/GBT basis generator.',
             'Family percentages are metric/basis dependent, not portions of critical load.',
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
+            'Independent rigid motion of built-up pieces is reported as Assembly and is not counted as Distortional.',
+            'Geometric D is driven by fold-line/anchor translation; L is within-panel remainder after G/A/D.',
             'L/D/G family energy requires compatible full elastic K and all retained DOFs; signed cross terms must not be discarded.',
             'SUPPLIED review/reference evidence is recorded, not independently certified by this program.',
             'No conclusion of family absence or DSM applicability follows from missing candidates.'])
@@ -614,7 +616,7 @@ def write_outputs(output_dir, summary):
         'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
         'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
         'energy_cross_terms_percent', 'spectral_fit_error', 'dominant_spectral_share', 'transverse_share',
-        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'flags',
+        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'flags',
         'eigenspace_stable_family', 'eigenspace_L_min', 'eigenspace_L_max', 'eigenspace_D_min',
         'eigenspace_D_max', 'eigenspace_G_min', 'eigenspace_G_max']
     with open(os.path.join(output_dir, 'modal_percentages.csv'), 'w', newline='', encoding='utf-8-sig') as stream:
@@ -625,6 +627,7 @@ def write_outputs(output_dir, summary):
             flat['flags'] = ';'.join(row['flags'])
             flat['sensitivity_range_pp'] = (row.get('sensitivity') or {}).get('max_range_pp')
             flat['relative_piece_rigid_percent'] = (row.get('rigid_diagnostics') or {}).get('relative_piece_rigid_percent')
+            flat['assembly_percent'] = (row.get('rigid_diagnostics') or {}).get('assembly_percent')
             if row.get('eigenspace_bounds'):
                 for j, f in enumerate(FAMILIES):
                     for bound in ('min', 'max'):
@@ -705,6 +708,8 @@ def parse_arguments(argv=None):
     p.add_argument('--validation-tolerance', type=float, default=.05)
     p.add_argument('--mesh-shape-threshold', type=float, default=.95, help='Minimum cos squared principal angle for DSM mesh evidence')
     p.add_argument('--max-sensitivity-pp', type=float, default=10., help='Panel-angle sensitivity limit in percentage points, not a probability')
+    p.add_argument('--max-assembly-percent', type=float, default=25.,
+                   help='Above this piece-rigid self-norm share, do not force the mode into DSM L/D/G')
     args = p.parse_args(argv)
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
     args.output_dir = os.path.abspath(args.output_dir or os.path.join(args.run_dir, 'modal_dsm_audit'))
