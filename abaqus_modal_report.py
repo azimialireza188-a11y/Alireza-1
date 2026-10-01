@@ -137,13 +137,17 @@ class SectionProjector:
                 if not segs:
                     continue
                 runs=[]; current=[segs[0]]
+                reference=segs[0][2:4]-segs[0][0:2]
                 for seg in segs[1:]:
-                    va=current[-1][2:4]-current[-1][0:2]
                     vb=seg[2:4]-seg[0:2]
-                    if angle_between(va,vb)<=wall_angle_deg:
+                    # Compare to the run's reference direction, not only the
+                    # immediately previous segment. Otherwise a finely
+                    # discretized radius can accumulate large curvature while
+                    # every incremental turn stays below the tolerance.
+                    if angle_between(reference,vb)<=wall_angle_deg:
                         current.append(seg)
                     else:
-                        runs.append(current); current=[seg]
+                        runs.append(current); current=[seg]; reference=vb
                 runs.append(current)
                 total=sum(float(np.linalg.norm(x[2:4]-x[0:2])) for x in segs)
                 min_len=max(3.*typical_edge, .04*total)
@@ -161,10 +165,10 @@ class SectionProjector:
                 if len(chain)<3:
                     continue
                 vectors=np.diff(self.xy[chain],axis=0)
-                runs=[]; start=0
+                runs=[]; start=0; reference=vectors[0]
                 for j in range(1,len(vectors)):
-                    if angle_between(vectors[j-1],vectors[j])>wall_angle_deg:
-                        runs.append((start,j)); start=j
+                    if angle_between(reference,vectors[j])>wall_angle_deg:
+                        runs.append((start,j)); start=j; reference=vectors[j]
                 runs.append((start,len(vectors)))
                 chain_length=float(np.sum(np.linalg.norm(vectors,axis=1)))
                 min_len=max(3.*typical_edge,.04*chain_length)
