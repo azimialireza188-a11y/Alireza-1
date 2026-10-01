@@ -134,6 +134,13 @@ def write_critical_stress_wavelength(output_dir, summary):
     ax.plot([r['half_wavelength_mm'] for r in envelope], [r[value] for r in envelope],
             color='#e87500', lw=1.8, label='Abaqus: lowest computed mode per half-wave')
 
+    if value == 'stress_MPa':
+        for ref in summary.get('curve_reference', []):
+            points = ref.get('points', [])
+            if points:
+                ax.plot([p[0] for p in points], [p[1] for p in points], lw=1.4,
+                        label=ref.get('label', 'reference curve'))
+
     # Family minima are shown without implying that a geometric proxy is a
     # mechanically validated DSM Fcr.
     for family in ('L', 'D', 'G'):
@@ -186,6 +193,12 @@ def write_critical_stress_wavelength(output_dir, summary):
         ax.plot([r['half_wavelength_mm'] for r in env], [r[value] for r in env],
                 marker='o', ms=3, lw=1.4, color=COLORS[family],
                 label={'L':'L (local proxy)','D':'D (distortional proxy)','G':'G (global proxy)'}[family])
+    if value == 'stress_MPa':
+        for ref in summary.get('curve_reference', []):
+            points = ref.get('points', [])
+            if points:
+                ax.plot([p[0] for p in points], [p[1] for p in points], ls='--', lw=1.1,
+                        label=ref.get('label', 'reference curve'))
     ax.set_xscale('log')
     if all(r[value] > 0 for r in rows):
         ax.set_yscale('log')
