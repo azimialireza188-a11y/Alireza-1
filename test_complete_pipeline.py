@@ -12,17 +12,15 @@ import abaqus_complete_model_m20 as builder
 
 
 class PipelineTests(unittest.TestCase):
-    def test_shell_energy_requires_detailed_fields_and_uses_same_audit(self):
-        import abaqus_modal_shell_energy as shell
-        with mock.patch.object(shell, 'process', return_value={'modes_processed': 250}) as process:
-            standard = builder.complete_shell_report('run', 'audit', {'fields_available_in_all_modes': ['U', 'UR']})
-            self.assertEqual(standard['status'], 'UNAVAILABLE_MISSING_DETAILED_FIELDS')
-            process.assert_not_called()
-            detailed = builder.complete_shell_report('run', 'audit', {'fields_available_in_all_modes': list(shell.REQUIRED)})
-            self.assertEqual(detailed['status'], 'COMPLETED')
-            process.assert_called_once_with('run', os.path.join('audit', 'shell_energy'), audit_dir='audit')
+    def test_automatic_pipeline_has_no_shell_energy_stage(self):
+        self.assertFalse(hasattr(builder, 'complete_shell_report'))
+        with open(builder.__file__) as stream:
+            source = stream.read()
+        self.assertNotIn('ModalShellDiagnostics', source)
+        self.assertNotIn("variables=('S', 'E', 'SF', 'SE')", source)
+        self.assertNotIn('abaqus_modal_shell_energy', source)
 
-    def test_detailed_output_and_optional_audit_cli(self):
+    def test_legacy_detailed_flag_is_accepted_but_classification_pipeline_stays_lean(self):
         args = builder.parse_arguments(['--buckle-output', 'detailed', '--modal-audit'])
         self.assertEqual(args.buckle_output, 'detailed')
         self.assertEqual(args.nodal_precision, 'full')
