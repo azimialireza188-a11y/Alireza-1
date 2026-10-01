@@ -521,28 +521,40 @@ def write_cluster_report(output_dir, summary):
     with open(path, 'w', newline='', encoding='utf-8-sig') as stream:
         writer = csv.writer(stream)
         writer.writerow(['cluster', 'modes', 'eigen_min', 'eigen_max', 'stable_family', 'spectrum_boundary',
-                         'L_min', 'L_max', 'D_min', 'D_max', 'G_min', 'G_max', 'angle_sensitive',
+                         'L_min', 'L_max', 'D_min', 'D_max', 'G_min', 'G_max', 'A_min', 'A_max', 'angle_sensitive',
                          'spectral_isolated', 'unresolved_neighbor', 'bound_error', 'mathematical_bound_family'])
         for r in usable:
             b = r['bounds']
             writer.writerow([r['cluster_id'], ';'.join(map(str, r['modes'])), *r['eigenvalue_range'],
                 r['family'], r.get('spectrum_boundary', False),
-                *[x for i in range(3) for x in (b['min_percent'][i], b['max_percent'][i])], r.get('angle_sensitive'),
+                *[x for i in range(3) for x in (b['min_percent'][i], b['max_percent'][i])],
+                b.get('assembly_min_percent'), b.get('assembly_max_percent'), r.get('angle_sensitive'),
                 r.get('spectral_isolation', {}).get('isolated'),
                 r.get('spectral_isolation', {}).get('unresolved_neighbor'), r.get('bound_error'), b['stable_family']])
     if not usable: return
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    fig, axes = plt.subplots(3, 1, figsize=(14, 10), sharex=True)
-    for i, (ax, color) in enumerate(zip(axes, ('#18a477', '#e89b32', '#4489e8'))):
-        x = [r['modes'][0] for r in usable]
+    has_assembly = any('assembly_min_percent' in r['bounds'] for r in usable)
+    count = 4 if has_assembly else 3
+    fig, axes = plt.subplots(count, 1, figsize=(14, 12 if has_assembly else 10), sharex=True)
+    x = [r['modes'][0] for r in usable]
+    for i, (ax, color) in enumerate(zip(axes[:3], ('#18a477', '#e89b32', '#4489e8'))):
         low = [r['bounds']['min_percent'][i] for r in usable]
         high = [r['bounds']['max_percent'][i] for r in usable]
         ax.vlines(x, low, high, color=color, lw=2)
         ax.scatter(x, [r['bounds']['mean_percent'][i] for r in usable], c=color, s=10)
         ax.axhline(90, color='#777777', ls='--', lw=.7)
         ax.set(ylabel=FAMILIES[i]+' norm share (%)', ylim=(-2, 102))
+    if has_assembly:
+        ax = axes[3]
+        low = [r['bounds'].get('assembly_min_percent', np.nan) for r in usable]
+        high = [r['bounds'].get('assembly_max_percent', np.nan) for r in usable]
+        mean = [r['bounds'].get('assembly_mean_percent', np.nan) for r in usable]
+        ax.vlines(x, low, high, color='#b060c8', lw=2)
+        ax.scatter(x, mean, c='#b060c8', s=10)
+        ax.axhline(summary['settings'].get('max_assembly_percent', 25.), color='#777777', ls='--', lw=.7)
+        ax.set(ylabel='A assembly share (%)', ylim=(-2, 102))
     axes[-1].set_xlabel('First mode of eigenvalue cluster; bars: attainable min/max, dots: mean')
     fig.suptitle('Eigenspace participation bounds | geometric screening unless validated mechanical basis supplied\n'
                  'All combinations in each cluster; near-distinct combinations are not individual eigenmodes')
@@ -551,7 +563,9 @@ def write_cluster_report(output_dir, summary):
     with open(png, 'rb') as stream: encoded = base64.b64encode(stream.read()).decode('ascii')
     table = ''.join('<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' %
         (html.escape(', '.join(map(str, r['modes']))), r['family'],
-         ' / '.join('%.2f–%.2f' % p for p in zip(r['bounds']['min_percent'], r['bounds']['max_percent'])),
+         ' / '.join('%.2f–%.2f' % p for p in zip(r['bounds']['min_percent'], r['bounds']['max_percent']))+
+         ((' / A %.2f–%.2f' % (r['bounds']['assembly_min_percent'], r['bounds']['assembly_max_percent']))
+          if 'assembly_min_percent' in r['bounds'] else ''),
          'YES' if r.get('spectrum_boundary') else 'no',
          html.escape('; '.join(s for s in (
              'unresolved neighboring spectral gap' if r.get('spectral_isolation', {}).get('unresolved_neighbor') else '',
@@ -562,7 +576,7 @@ def write_cluster_report(output_dir, summary):
 <h1>Modal eigenspace validation</h1><p>Intervals replace unjustified certainty from one arbitrary eigenvector. A family is stable only if its minimum share meets the dominance threshold. Extrema are independently attainable, not additive. Near-distinct modes describe a subspace, not a new exact eigenmode.</p>
 <p>These are geometric bounds unless a documented mechanical basis was supplied. They do not establish Fcrl, Fcrd or Fcre. The highest extracted cluster has no observed upper spectral gap and remains open.</p>
 <img src="data:image/png;base64,__IMAGE__"><p><a href="eigenspace_bounds.csv">CSV intervals</a> · <a href="modal_audit.json">Full audit</a> · <a href="modal_explorer.html">Shape explorer</a></p>
-<table><tr><th>Modes</th><th>Final family</th><th>L / D / G ranges %</th><th>Open upper boundary</th><th>Additional limits</th></tr>__TABLE__</table>'''.replace('__IMAGE__', encoded).replace('__TABLE__', table)
+<table><tr><th>Modes</th><th>Final family</th><th>L / D / G / A ranges %</th><th>Open upper boundary</th><th>Additional limits</th></tr>__TABLE__</table>'''.replace('__IMAGE__', encoded).replace('__TABLE__', table)
     with open(os.path.join(output_dir, 'eigenspace_validation.html'), 'w', encoding='utf-8') as stream: stream.write(text)
 
 
