@@ -24,10 +24,14 @@ class ModalReportTests(unittest.TestCase):
         self.assertLess(shares[0], 1e-10)
         self.assertLess(shares[1], 1e-10)
 
-    def test_section_stretch_is_only_a_distortional_proxy(self):
-        # This deliberate limitation must remain documented: no cFSM strain constraints.
+    def test_section_stretch_is_other_not_distortional(self):
+        # Chord extension is a non-DSM Other/ST-like motion, not D.
         u = np.column_stack((self.xy[:, 0]-5., np.zeros(9)))
-        self.assertAlmostEqual(self.fit.shares(u[None, :, :])[1], 1., places=10)
+        d = self.fit.component_diagnostics(u[None, :, :])
+        self.assertGreater(d['other_percent'], 99.999)
+        self.assertLess(d['distortional_percent'], 1e-8)
+        self.assertEqual(report.family_label(self.fit.shares(u[None, :, :]), self.fit.supported,
+                                             other_percent=d['other_percent']), 'Other-like')
 
     def test_shares_are_scale_sign_invariant_and_sum_to_one(self):
         rng = np.random.RandomState(4)
