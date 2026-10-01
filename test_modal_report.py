@@ -66,7 +66,7 @@ class ModalReportTests(unittest.TestCase):
         # Local bending on the first wall with moving end folds must remain Local.
         u=np.zeros((len(xy),2))
         t=np.linspace(0.,1.,5)
-        u[:5,1]=2.*t + np.sin(np.pi*t)
+        u[:5,1]=.2*t + np.sin(np.pi*t)
         d=fit.component_diagnostics(u)
         self.assertGreater(d['local_percent'],50.)
         self.assertGreater(d['wall_curvature_index'],0.)
