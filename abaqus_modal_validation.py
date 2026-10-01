@@ -175,8 +175,9 @@ def proxy_cluster(vectors, projector, dominance=.9, max_assembly_percent=25.):
     """Bounds for L/D/G plus an explicit built-up assembly-motion gate.
 
     The projector is linear.  We whiten the observed eigenspace first, apply
-    the anchor-driven split to every orthonormal direction, and compute exact
-    generalized-eigenvalue share bounds.  Assembly motion is not folded into D.
+    the anchor-driven split to every orthonormal direction, and compute
+    generalized-eigenvalue self-norm share bounds. Assembly motion is never
+    folded into D.
     """
     from abaqus_dsm_modal_audit import orth
     q = orth(vectors)
@@ -188,24 +189,33 @@ def proxy_cluster(vectors, projector, dominance=.9, max_assembly_percent=25.):
         for k, part in enumerate(parts):
             component_columns[k].append(np.asarray(part).reshape(-1))
     parts = [np.column_stack(cols) for cols in component_columns]
-    result = component_bounds(parts[:3], dominance)
-
     grams = [p.T @ p for p in parts]
-    h = sum(grams)
-    h = .5*(h+h.T)
-    ev = np.linalg.eigvalsh(h)
-    if ev[0] <= 1e-12*ev[-1]:
+
+    # Assembly share is measured against all component self norms.
+    hall = .5*(sum(grams)+sum(grams).T)
+    ev = np.linalg.eigvalsh(hall)
+    if not len(ev) or ev[-1] <= 0 or ev[0] <= 1e-12*ev[-1]:
         raise ValueError('Rank-deficient observed proxy component space')
-    chol = np.linalg.cholesky(h)
+    chol = np.linalg.cholesky(hall)
     left = np.linalg.solve(chol, grams[3])
     whitened = np.linalg.solve(chol, left.T).T
     ae = np.clip(np.linalg.eigvalsh(.5*(whitened+whitened.T)), 0., 1.)
-    result['assembly_min_percent'] = float(100*ae[0])
-    result['assembly_max_percent'] = float(100*ae[-1])
-    result['assembly_mean_percent'] = float(100*np.mean(ae))
-    if result['assembly_min_percent'] >= max_assembly_percent:
-        result['stable_family'] = 'Assembly'
-    elif result['assembly_max_percent'] >= max_assembly_percent:
+    amin, amax, amean = [float(100*x) for x in (ae[0], ae[-1], np.mean(ae))]
+
+    # A purely assembly-controlled eigenspace has no meaningful L/D/G
+    # denominator. Report it explicitly rather than failing into Unresolved.
+    if amin >= max_assembly_percent:
+        z = [0.0, 0.0, 0.0]
+        return dict(min_percent=z[:], max_percent=z[:], mean_percent=z[:],
+                    stable_family='Assembly', dimension=q.shape[1],
+                    assembly_min_percent=amin, assembly_max_percent=amax,
+                    assembly_mean_percent=amean)
+
+    result = component_bounds(parts[:3], dominance)
+    result['assembly_min_percent'] = amin
+    result['assembly_max_percent'] = amax
+    result['assembly_mean_percent'] = amean
+    if amax >= max_assembly_percent:
         result['stable_family'] = 'Mixed'
     return result
 
