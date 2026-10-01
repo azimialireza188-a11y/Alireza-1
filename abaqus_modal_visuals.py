@@ -35,7 +35,7 @@ def weighted_raw(values, longitudinal_weights, sqrt_section_weights):
 
 
 def section_percentages(vector, projector):
-    """Return audit order L/D/G using the anchor-driven projector."""
+    """Return audit order L/D/G using the physical-wall curvature-aware projector."""
     return projector.audit_shares(np.asarray(vector))
 
 
@@ -63,6 +63,7 @@ def rigid_shares(vector, projector, qrelative=None):
         local_within_ldg_percent=d['local_percent'],
         distortional_within_ldg_percent=d['distortional_percent'],
         assembly_percent=d['assembly_percent'], other_percent=d.get('other_percent', 0.),
+        wall_curvature_index=d.get('wall_curvature_index'),
         reconstruction_relative_error=d['reconstruction_relative_error'])
 
 
