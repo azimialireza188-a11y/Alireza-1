@@ -222,13 +222,13 @@ class SectionProjector:
             parts[key] = parts[key].reshape(original_shape)
         return parts
 
-    def component_diagnostics(self, coefficients):
-        parts = self._weighted_components(coefficients)
+    def component_diagnostics_weighted(self, weighted_coefficients):
+        parts = self._weighted_components(weighted_coefficients)
         norms = {k: float(np.sum(v*v)) for k, v in parts.items()}
         ldg = norms['L']+norms['D']+norms['G']
         all_self = ldg+norms['A']
         reconstruction = sum(parts.values())
-        y = np.asarray(coefficients, dtype=float)
+        y = np.asarray(weighted_coefficients, dtype=float)
         return dict(
             global_percent=100*norms['G']/max(ldg, 1e-250),
             distortional_percent=100*norms['D']/max(ldg, 1e-250),
@@ -237,16 +237,22 @@ class SectionProjector:
             reconstruction_relative_error=float(np.linalg.norm(y-reconstruction)/max(np.linalg.norm(y), 1e-250)),
             component_norm_sum_over_input=float(all_self/max(float(np.sum(y*y)), 1e-250)))
 
+    def component_diagnostics(self, coefficients):
+        # Historical SectionProjector API receives unweighted section values.
+        x = np.asarray(coefficients, dtype=float)
+        weighted = (x.reshape(-1, len(self.sqrtw))*self.sqrtw[None, :]).reshape(x.shape)
+        return self.component_diagnostics_weighted(weighted)
+
     def shares(self, coefficients):
         d = self.component_diagnostics(coefficients)
         return [d['global_percent']/100., d['distortional_percent']/100., d['local_percent']/100.]
 
-    def audit_shares(self, coefficients):
-        d = self.component_diagnostics(coefficients)
+    def audit_shares(self, weighted_coefficients):
+        d = self.component_diagnostics_weighted(weighted_coefficients)
         return [d['local_percent'], d['distortional_percent'], d['global_percent']]
 
-    def audit_components(self, coefficients):
-        p = self._weighted_components(coefficients)
+    def audit_components(self, weighted_coefficients):
+        p = self._weighted_components(weighted_coefficients)
         return [p['L'], p['D'], p['G'], p['A']]
 
 
