@@ -417,7 +417,7 @@ def process(args):
             raw_vector = None
             if grid is not None:
                 raw_vector = visuals.weighted_raw(u[grid['indices']][:, :, geo['transverse']], grid['weights'], proxy.sqrtw)
-            direct_diagnostics = visuals.rigid_shares(raw_vector, proxy, qrelative) if raw_vector is not None else None
+            direct_diagnostics = None
             sensitivity = None; raw_delta = None; fitted_percentages = None
             if mechanical:
                 vector = read_mapped_mode(frame, mapped_keys)
@@ -443,7 +443,11 @@ def process(args):
                     relative_residual=0. if raw_vector is not None else (row['relative_fit_error'] if row['relative_fit_error'] is not None else 1.),
                     displacement_cross_percent=0., component_norm_sum_over_input=1., condition=None)
                 energy = None
+                direct_diagnostics = visuals.rigid_shares(vector, proxy, qrelative)
             label = classify(projected, args.dominance, args.max_residual)
+            if (not mechanical and direct_diagnostics and
+                    direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent):
+                label = 'Assembly'
             flags = []
             if mechanical and projected['condition'] > 1e3:
                 flags.append('ILL_CONDITIONED_COMPONENT_FIT')
@@ -455,6 +459,8 @@ def process(args):
                     label = 'Unresolved'; flags.append('UNSUPPORTED_PROXY_TOPOLOGY')
                 if sensitivity['max_range_pp'] > args.max_sensitivity_pp or len(set(sensitivity['labels'])) > 1:
                     label = 'Unresolved'; flags.append('PANEL_DEFINITION_SENSITIVE')
+                if direct_diagnostics and direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent:
+                    label = 'Assembly'; flags.append('ASSEMBLY_RIGID_MOTION_DOMINANT')
                 if raw_vector is None:
                     flags.append('NONALIGNED_STATIONS_FITTED_METRIC_FALLBACK')
                 if coverage < .99:
@@ -467,7 +473,7 @@ def process(args):
                 flags.append('WAVELENGTH_NEAR_MESH_RESOLUTION_LIMIT')
             mode_vectors[row['mode']] = vector
             result = dict(mode=row['mode'], eigenvalue=eigenvalue, stress_MPa=eigenvalue*sigma if sigma else None,
-                family=label, percentages=projected['percentages'],
+                family=label, percentages=projected['percentages'], dominant_halfwaves=row.get('dominant_halfwaves'),
                 relative_residual=projected['relative_residual'], displacement_cross_percent=projected['displacement_cross_percent'],
                 condition=projected['condition'], half_wavelength_mm=row['half_wavelength_mm'], flags=flags,
                 spectral_fit_error=row['relative_fit_error'], dominant_spectral_share=row['dominant_share'],
@@ -503,8 +509,8 @@ def process(args):
                     residual = projection['residual']*mechanical.sqrtw[:, None]
                     bounds['maximum_relative_residual'] = float(np.sqrt(max(0., np.linalg.eigvalsh(residual.T@residual)[-1])))
                 else:
-                    bounds = validation.proxy_cluster(vectors, proxy, args.dominance)
-                    angle_bounds = [validation.proxy_cluster(vectors, p, args.dominance) for p in variants]
+                    bounds = validation.proxy_cluster(vectors, proxy, args.dominance, args.max_assembly_percent)
+                    angle_bounds = [validation.proxy_cluster(vectors, p, args.dominance, args.max_assembly_percent) for p in variants]
                     angle_sensitive = (len(set(b['stable_family'] for b in angle_bounds+[bounds])) > 1 or
                         any(np.max(np.ptp([b[k] for b in angle_bounds+[bounds]], axis=0)) > args.max_sensitivity_pp
                             for k in ('min_percent', 'max_percent')))
@@ -721,6 +727,8 @@ def parse_arguments(argv=None):
         p.error('dominance must exceed 0.5 for a unique dominant family')
     if not math.isfinite(args.max_sensitivity_pp) or not 0 < args.max_sensitivity_pp <= 100:
         p.error('--max-sensitivity-pp must be in (0, 100]')
+    if not math.isfinite(args.max_assembly_percent) or not 0 < args.max_assembly_percent < 100:
+        p.error('--max-assembly-percent must be in (0, 100)')
     if os.path.exists(args.output_dir) and (not os.path.isdir(args.output_dir) or os.listdir(args.output_dir)):
         p.error('Output directory must be new or empty; choose --output-dir for another audit')
     return args
