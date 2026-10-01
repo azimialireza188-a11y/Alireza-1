@@ -45,7 +45,7 @@ class DirectShapeTests(unittest.TestCase):
         xy = np.array([[0., 0.], [1., 0.], [0., 2.], [1., 2.]])
         p = report.SectionProjector(xy, [(0, 1), (2, 3)], ['A', 'A', 'B', 'B'], np.ones(4))
         q = v.relative_piece_basis(p, ['A', 'A', 'B', 'B'])
-        u = np.array([[1., 0.], [1., 0.], [-1., 0.], [-1., 0.]])
+        u = np.array([[0., 1.], [0., 1.], [0., -1.], [0., -1.]])
         shares = v.rigid_shares(u.ravel(), p, q)
         total = (shares['whole_section_rigid_percent']+shares['relative_piece_rigid_percent']+
                  shares['within_piece_deformation_percent'])
