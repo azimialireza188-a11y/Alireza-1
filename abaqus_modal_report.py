@@ -32,9 +32,10 @@ LIMITATION = ('Geometric displacement classification only; not cFSM/GBT or strai
     'changes panel chord length is reported as Other-like transverse extension and is also '
     'excluded. Distortional proxy is driven by inextensional translation of fold lines after '
     'whole-section and piece-rigid motion are removed; local proxy is the remaining within-panel '
-    'deformation. Curved panels weaken '
-    'the physical interpretation and are flagged; unsupported topology or poorly fitted '
-    'modes remain unresolved. Inspect the displayed shapes.')
+    'deformation. Local plate bending is measured first relative to moving physical wall '
+    'chords from builtup_segments.csv when available; only the remaining fold/coarse motion '
+    'can become D. Older runs without persisted wall geometry use a mesh fallback and are '
+    'flagged accordingly. Inspect the displayed shapes.')
 
 
 def orth(matrix):
@@ -486,6 +487,19 @@ def load_results(report_path):
     return metadata, rows, spectra, prefix
 
 
+def load_physical_segments(report_dir):
+    """Read physical wall geometry persisted by the one-command builder."""
+    candidates=[name for name in os.listdir(report_dir) if name.endswith('_build.json')]
+    if len(candidates)!=1:
+        return None
+    try:
+        with open(os.path.join(report_dir,candidates[0])) as stream:
+            build=json.load(stream)
+    except (OSError,ValueError):
+        return None
+    return (build.get('source_inputs') or {}).get('section_segments')
+
+
 def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle, family_threshold, max_assembly_percent, max_other_percent):
     from odbAccess import openOdb
     odb_path = os.path.join(report_dir, os.path.basename(metadata['odb']))
@@ -524,8 +538,10 @@ def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle,
                     if ia != ib and abs(coordinates[ka][axis]-coordinates[kb][axis]) <= tolerance:
                         edges.add(tuple(sorted((ia, ib))))
         edges = sorted(edges)
+        physical_segments=load_physical_segments(report_dir)
         fit = SectionProjector(xy, edges, [t['instance'] for t in tracks],
-                               [t['weight'] for t in tracks], corner_angle)
+                               [t['weight'] for t in tracks], corner_angle,
+                               physical_segments=physical_segments)
         group_tracks = [[track_index[int(index)] for index in group['indices'][0]] for group in groups]
         frames = {}
         for frame in odb.steps[metadata['step']].frames:
@@ -558,6 +574,7 @@ def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle,
             row.update(global_proxy_share=shares[0], distortional_proxy_share=shares[1],
                        local_proxy_share=shares[2], assembly_proxy_share=split['assembly_percent']/100.,
                        other_proxy_share=split['other_percent']/100.,
+                       wall_curvature_index=split.get('wall_curvature_index'),
                        family=family_label(shares, fit.supported, family_threshold, bad,
                                            split['assembly_percent'], max_assembly_percent,
                                            split['other_percent'], max_other_percent),
