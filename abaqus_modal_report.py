@@ -57,7 +57,7 @@ class SectionProjector:
     local plate buckle cannot be consumed by a coarse Distortional
     interpolation merely because the corner/fold nodes also move.
 
-      L: within-wall bending relative to moving wall chords (plus tiny closure residual),
+      L: normal within-wall bending relative to moving wall chords,
       G: whole-section rigid motion of physical fold lines,
       A: independent rigid motion of built-up pieces after G,
       O: first-order wall-chord extension/shear-like fold motion,
@@ -207,24 +207,27 @@ class SectionProjector:
             pts=self.xy[path]
             dist=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(pts,axis=0),axis=1))]
             length=max(float(dist[-1]),1e-30); wall_lengths.append(length)
+            chord=pts[-1]-pts[0]; tangent=chord/max(np.linalg.norm(chord),1e-30)
+            normal=np.array([-tangent[1],tangent[0]])
+            nn=np.outer(normal,normal)
             for node,t in zip(path[1:-1],dist[1:-1]/length):
                 if node in local_rows:
                     continue
-                for comp in (0,1):
-                    row=2*node+comp
-                    pwall[row,row]=1.
-                    pwall[row,2*path[0]+comp]-=(1.-t)
-                    pwall[row,2*path[-1]+comp]-=t
+                # Only displacement normal to the wall chord is Local plate
+                # bending. Tangential/nonlinear residuals are retained for the
+                # non-DSM Other component.
+                rows=slice(2*node,2*node+2)
+                pwall[rows,2*node:2*node+2]+=nn
+                pwall[rows,2*path[0]:2*path[0]+2]-=(1.-t)*nn
+                pwall[rows,2*path[-1]:2*path[-1]+2]-=t*nn
                 local_rows.add(node)
-            chord=pts[-1]-pts[0]; tangent=chord/max(np.linalg.norm(chord),1e-30)
-            normal=np.array([-tangent[1],tangent[0]])
             for j in range(1,len(path)-1):
                 h0=max(dist[j]-dist[j-1],1e-30); h1=max(dist[j+1]-dist[j],1e-30)
                 coeff=[2./(h0*(h0+h1)),-2./(h0*h1),2./(h1*(h0+h1))]
                 row=np.zeros(ndof)
                 for node,c in zip(path[j-1:j+2],coeff):
                     row[2*node:2*node+2]+=c*normal
-                wall_curvature_rows.append(row)
+                wall_curvature_rows.append(row*length*length)
         self.pwalllocal=pwall
         self.curvature_matrix=np.vstack(wall_curvature_rows) if wall_curvature_rows else np.zeros((0,ndof))
 
@@ -312,9 +315,12 @@ class SectionProjector:
 
         fold_residual=gather@after_assembly
         self.pdist=interpolation@pd@fold_residual
-        self.pother=interpolation@po@fold_residual
-        remainder=eye-self.pwalllocal-self.pglobal-self.passembly-self.pdist-self.pother
-        self.plocal=self.pwalllocal+remainder
+        coarse_other=interpolation@po@fold_residual
+        remainder=eye-self.pwalllocal-self.pglobal-self.passembly-self.pdist-coarse_other
+        # Any non-chord, non-fold residual is membrane/shear/corner-zone motion,
+        # not plate bending. Keep it out of L and report it as Other.
+        self.pother=coarse_other+remainder
+        self.plocal=self.pwalllocal
 
         to_weighted=np.diag(self.sqrtw); from_weighted=np.diag(1./self.sqrtw)
         self.qassembly=orth(to_weighted@self.passembly@from_weighted)
@@ -341,7 +347,7 @@ class SectionProjector:
             local_rank=self.qlocal.shape[1], wall_bending_rank=int(np.linalg.matrix_rank(self.pwalllocal)),
             panel_extension_constraint_rank=crank,
             maximum_panel_arc_length=float(max(wall_lengths) if wall_lengths else 0.),
-            split_definition='moving-chord wall-bending L first; then fold-driven G/A/O/D; exact closure remainder returned to L')
+            split_definition='normal moving-chord wall-bending L first; then fold-driven G/A/O/D; tangential/corner closure residual assigned to Other')
 
     def _weighted_components(self, coefficients):
         y=np.asarray(coefficients,dtype=float)
