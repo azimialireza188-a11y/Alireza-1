@@ -49,26 +49,26 @@ def orth(matrix):
 
 
 class SectionProjector:
-    """Anchor-driven geometric split for built-up open sections.
+    """Curvature-aware geometric screening split for built-up open sections.
 
-    The previous proxy put independent rigid motion of each built-up piece in
-    the distortional space and fitted whole-section rigid motion to every panel
-    node. Both choices can turn local plate buckling into a false D/G label.
-    This implementation uses fold-line/anchor translations as the kinematic
-    evidence for G and D:
+    The key rule is that Local is measured first from bending of a physical
+    wall relative to the moving chord joining its two fold lines. Therefore a
+    local plate buckle cannot be consumed by a coarse Distortional
+    interpolation merely because the corner/fold nodes also move.
 
-      G: whole-section rigid motion fitted only to anchors,
-      A: independent rigid motion of each physical piece after removing G,
-      O: panel chord extension / shear-like anchor motion (non-DSM Other),
-      D: inextensional fold-line motion after removing G, A and O,
-      L: nodal remainder after G + A + O + D.
+      L: within-wall bending relative to moving wall chords (plus tiny closure residual),
+      G: whole-section rigid motion of physical fold lines,
+      A: independent rigid motion of built-up pieces after G,
+      O: first-order wall-chord extension/shear-like fold motion,
+      D: remaining inextensional fold-line/coarse-wall motion.
 
-    A and O are intentionally separate from DSM L/D/G. L/D/G percentages normalize
-    only G, D and L self-norms; assembly/other participation is reported separately.
-    The split is linear, so it can also be applied to a rotated eigenspace.
+    physical_segments is optional. When supplied it is the preferred source of
+    wall locations and comes from builtup_segments.csv through the one-command
+    pipeline. Older runs fall back to a conservative mesh straight-run detector.
     """
 
-    def __init__(self, xy, edges, pieces, weights, corner_angle=15.):
+    def __init__(self, xy, edges, pieces, weights, corner_angle=15.,
+                 physical_segments=None, wall_angle_deg=3.0):
         self.xy = np.asarray(xy, dtype=float)
         self.weights = np.asarray(weights, dtype=float)
         self.pieces = np.asarray(pieces)
@@ -76,224 +76,317 @@ class SectionProjector:
         if self.weights.shape != (count,) or np.any(self.weights <= 0):
             raise ValueError('Positive section weights required')
         self.sqrtw = np.repeat(np.sqrt(self.weights), 2)
-        centered = self.xy-np.average(self.xy, axis=0, weights=self.weights)
-        rigid = np.zeros((count, 2, 3))
-        rigid[:, 0, 0] = 1.
-        rigid[:, 1, 1] = 1.
-        rigid[:, 0, 2] = -centered[:, 1]
-        rigid[:, 1, 2] = centered[:, 0]
-        rigid_flat = rigid.reshape(-1, 3)
-        self.qglobal = orth(rigid_flat*self.sqrtw[:, None])
+        ndof = 2*count
+        eye = np.eye(ndof)
 
         adjacency = [set() for _ in range(count)]
         for aa, bb in edges:
-            adjacency[aa].add(bb)
-            adjacency[bb].add(aa)
-        anchors = set()
-        for i, neighbors in enumerate(adjacency):
-            if len(neighbors) != 2:
-                anchors.add(i)
-            else:
-                aa, bb = list(neighbors)
-                v, w = self.xy[i]-self.xy[aa], self.xy[bb]-self.xy[i]
-                angle = math.degrees(math.acos(float(np.clip(np.dot(v, w)/
-                    max(np.linalg.norm(v)*np.linalg.norm(w), 1e-30), -1., 1.))))
-                if angle >= corner_angle:
-                    anchors.add(i)
-        anchors = sorted(anchors)
-        anchor_ids = {node: i for i, node in enumerate(anchors)}
+            adjacency[aa].add(bb); adjacency[bb].add(aa)
 
-        shape = np.zeros((count, len(anchors)))
-        for node, i in anchor_ids.items():
-            shape[node, i] = 1.
-        visited, paths = set(), []
-        for first in anchors:
-            for neighbor in adjacency[first]:
-                edge = tuple(sorted((first, neighbor)))
-                if edge in visited:
+        def angle_between(a, b):
+            na, nb = np.linalg.norm(a), np.linalg.norm(b)
+            if na <= 1e-30 or nb <= 1e-30:
+                return 180.
+            return math.degrees(math.acos(float(np.clip(np.dot(a, b)/(na*nb), -1., 1.))))
+
+        def piece_chain(name):
+            nodes = [i for i in range(count) if self.pieces[i] == name]
+            node_set = set(nodes)
+            ends = [i for i in nodes if len(adjacency[i] & node_set) == 1]
+            if len(ends) != 2:
+                return []
+            path=[ends[0]]; previous=None; current=ends[0]
+            while current != ends[1]:
+                nxt=list((adjacency[current]&node_set)-({previous} if previous is not None else set()))
+                if len(nxt)!=1:
+                    return []
+                previous,current=current,nxt[0]
+                path.append(current)
+                if len(path)>len(nodes)+1:
+                    return []
+            return path
+
+        def nearest_piece_node(name, point):
+            ids=np.where(self.pieces==name)[0]
+            if not len(ids):
+                return None
+            d=np.linalg.norm(self.xy[ids]-np.asarray(point,float),axis=1)
+            return int(ids[int(np.argmin(d))])
+
+        def path_between(chain, aa, bb):
+            if aa not in chain or bb not in chain:
+                return []
+            ia, ib=chain.index(aa), chain.index(bb)
+            return chain[ia:ib+1] if ia<=ib else list(reversed(chain[ib:ia+1]))
+
+        chains={str(name): piece_chain(name) for name in sorted(set(self.pieces))}
+        perimeter=sum(np.linalg.norm(self.xy[bb]-self.xy[aa]) for aa,bb in edges)
+        edge_lengths=[np.linalg.norm(self.xy[bb]-self.xy[aa]) for aa,bb in edges]
+        typical_edge=float(np.median(edge_lengths)) if edge_lengths else 1.
+
+        walls=[]
+        source='mesh_straight_runs'
+        if physical_segments:
+            source='builtup_segments.csv'
+            for raw_name, segments in sorted(physical_segments.items()):
+                name=str(raw_name)
+                if name not in chains or not chains[name]:
                     continue
-                path, previous, current = [first], first, neighbor
-                while True:
-                    visited.add(tuple(sorted((previous, current))))
-                    path.append(current)
-                    if current in anchor_ids:
-                        break
-                    next_nodes = adjacency[current]-{previous}
-                    if len(next_nodes) != 1 or len(path) > count:
-                        break
-                    previous, current = current, next(iter(next_nodes))
-                if path[-1] not in anchor_ids or path[-1] == first:
+                segs=[np.asarray(row,float) for row in segments]
+                if not segs:
                     continue
-                paths.append(path)
-                distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(self.xy[path], axis=0), axis=1))]
-                t = distance/max(distance[-1], 1e-30)
-                shape[path, anchor_ids[first]] = 1.-t
-                shape[path, anchor_ids[path[-1]]] = t
+                runs=[]; current=[segs[0]]
+                for seg in segs[1:]:
+                    va=current[-1][2:4]-current[-1][0:2]
+                    vb=seg[2:4]-seg[0:2]
+                    if angle_between(va,vb)<=wall_angle_deg:
+                        current.append(seg)
+                    else:
+                        runs.append(current); current=[seg]
+                runs.append(current)
+                total=sum(float(np.linalg.norm(x[2:4]-x[0:2])) for x in segs)
+                min_len=max(3.*typical_edge, .04*total)
+                for run in runs:
+                    length=sum(float(np.linalg.norm(x[2:4]-x[0:2])) for x in run)
+                    if length < min_len:
+                        continue
+                    p0,p1=run[0][0:2],run[-1][2:4]
+                    a0,a1=nearest_piece_node(name,p0),nearest_piece_node(name,p1)
+                    path=path_between(chains[name],a0,a1)
+                    if len(path)>=3:
+                        walls.append(dict(piece=name,path=path,source_length=length))
+        else:
+            for name,chain in chains.items():
+                if len(chain)<3:
+                    continue
+                vectors=np.diff(self.xy[chain],axis=0)
+                runs=[]; start=0
+                for j in range(1,len(vectors)):
+                    if angle_between(vectors[j-1],vectors[j])>wall_angle_deg:
+                        runs.append((start,j)); start=j
+                runs.append((start,len(vectors)))
+                chain_length=float(np.sum(np.linalg.norm(vectors,axis=1)))
+                min_len=max(3.*typical_edge,.04*chain_length)
+                for lo,hi in runs:
+                    path=chain[lo:hi+1]
+                    length=float(np.sum(np.linalg.norm(np.diff(self.xy[path],axis=0),axis=1)))
+                    if length>=min_len and len(path)>=3:
+                        walls.append(dict(piece=name,path=path,source_length=length))
 
-        total_length = sum(np.linalg.norm(self.xy[bb]-self.xy[aa]) for aa, bb in edges)
-        flat_length = 0.
-        panel_lengths = []
-        for path in paths:
-            points = self.xy[path]
-            chord = points[-1]-points[0]
-            length = np.linalg.norm(chord)
-            arc = float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
-            panel_lengths.append(arc)
-            if length:
-                deviation = np.abs(np.cross(points-points[0], chord))/length
-                if np.max(deviation) <= .02*length:
-                    flat_length += arc
+        unique=[]; seen=set()
+        for wall in walls:
+            path=wall['path']
+            key=(wall['piece'],min(path[0],path[-1]),max(path[0],path[-1]))
+            if key in seen:
+                continue
+            chord=self.xy[path[-1]]-self.xy[path[0]]
+            clen=np.linalg.norm(chord)
+            if clen<=1e-30:
+                continue
+            deviation=np.abs(np.cross(self.xy[path]-self.xy[path[0]],chord))/clen
+            if np.max(deviation)>max(.02*clen,.25*typical_edge):
+                continue
+            seen.add(key); unique.append(wall)
+        walls=unique
 
-        ndof = 2*count
-        eye = np.eye(ndof)
-        anchor_rows = np.array([2*i+j for i in anchors for j in (0, 1)], dtype=int)
+        fold_nodes=set()
+        for wall in walls:
+            fold_nodes.update((wall['path'][0],wall['path'][-1]))
+        for name,chain in chains.items():
+            if chain:
+                fold_nodes.update((chain[0],chain[-1]))
+        fold_nodes=sorted(fold_nodes)
+
+        pwall=np.zeros((ndof,ndof))
+        local_rows=set()
+        wall_lengths=[]
+        wall_curvature_rows=[]
+        for wall in walls:
+            path=wall['path']
+            pts=self.xy[path]
+            dist=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(pts,axis=0),axis=1))]
+            length=max(float(dist[-1]),1e-30); wall_lengths.append(length)
+            for node,t in zip(path[1:-1],dist[1:-1]/length):
+                if node in local_rows:
+                    continue
+                for comp in (0,1):
+                    row=2*node+comp
+                    pwall[row,row]=1.
+                    pwall[row,2*path[0]+comp]-=(1.-t)
+                    pwall[row,2*path[-1]+comp]-=t
+                local_rows.add(node)
+            chord=pts[-1]-pts[0]; tangent=chord/max(np.linalg.norm(chord),1e-30)
+            normal=np.array([-tangent[1],tangent[0]])
+            for j in range(1,len(path)-1):
+                h0=max(dist[j]-dist[j-1],1e-30); h1=max(dist[j+1]-dist[j],1e-30)
+                coeff=[2./(h0*(h0+h1)),-2./(h0*h1),2./(h1*(h0+h1))]
+                row=np.zeros(ndof)
+                for node,c in zip(path[j-1:j+2],coeff):
+                    row[2*node:2*node+2]+=c*normal
+                wall_curvature_rows.append(row)
+        self.pwalllocal=pwall
+        self.curvature_matrix=np.vstack(wall_curvature_rows) if wall_curvature_rows else np.zeros((0,ndof))
+
+        centered=self.xy-np.average(self.xy,axis=0,weights=self.weights)
+        rigid=np.zeros((count,2,3))
+        rigid[:,0,0]=1.; rigid[:,1,1]=1.
+        rigid[:,0,2]=-centered[:,1]; rigid[:,1,2]=centered[:,0]
+        rigid_flat=rigid.reshape(-1,3)
+        self.qglobal=orth(rigid_flat*self.sqrtw[:,None])
 
         def rigid_fit_operator(nodes, output_mask=None):
-            nodes = list(nodes)
-            rows = np.array([2*i+j for i in nodes for j in (0, 1)], dtype=int)
-            if len(rows) < 4:
-                return np.zeros((ndof, ndof)), 0
-            design = rigid_flat[rows]
-            ws = self.sqrtw[rows]
-            weighted = design*ws[:, None]
-            rank = int(np.linalg.matrix_rank(weighted, tol=max(weighted.shape)*np.finfo(float).eps*
-                                             max(np.linalg.norm(weighted, 2), 1.)))
-            if rank < 3:
-                return np.zeros((ndof, ndof)), rank
-            pinv = np.linalg.pinv(weighted, rcond=1e-12)
-            op = np.zeros((ndof, ndof))
-            op[:, rows] = rigid_flat @ pinv @ np.diag(ws)
+            nodes=list(nodes)
+            rows=np.array([2*i+j for i in nodes for j in (0,1)],dtype=int)
+            if len(rows)<4:
+                return np.zeros((ndof,ndof)),0
+            design=rigid_flat[rows]; ws=self.sqrtw[rows]
+            weighted=design*ws[:,None]
+            rank=int(np.linalg.matrix_rank(weighted,tol=max(weighted.shape)*np.finfo(float).eps*
+                                           max(np.linalg.norm(weighted,2),1.)))
+            if rank<3:
+                return np.zeros((ndof,ndof)),rank
+            pinv=np.linalg.pinv(weighted,rcond=1e-12)
+            op=np.zeros((ndof,ndof)); op[:,rows]=rigid_flat@pinv@np.diag(ws)
             if output_mask is not None:
-                keep = np.repeat(np.asarray(output_mask, dtype=bool), 2)
-                op[~keep, :] = 0.
-            return op, rank
+                keep=np.repeat(np.asarray(output_mask,dtype=bool),2); op[~keep,:]=0.
+            return op,rank
 
-        self.pglobal, global_anchor_rank = rigid_fit_operator(anchors)
-        residual_after_global = eye-self.pglobal
-        piece_total = np.zeros((ndof, ndof))
-        piece_anchor_ranks = {}
+        residual_after_local=eye-self.pwalllocal
+        self.pglobal,global_fold_rank=rigid_fit_operator(fold_nodes)
+        self.pglobal=self.pglobal@residual_after_local
+        after_global=residual_after_local-self.pglobal
+
+        piece_total=np.zeros((ndof,ndof)); piece_fold_ranks={}
         for name in sorted(set(self.pieces)):
-            nodes = [i for i in anchors if self.pieces[i] == name]
-            mask = self.pieces == name
-            op, rank = rigid_fit_operator(nodes, mask)
-            piece_anchor_ranks[str(name)] = rank
-            piece_total += op
-        self.passembly = piece_total @ residual_after_global
+            nodes=[i for i in fold_nodes if self.pieces[i]==name]
+            mask=self.pieces==name
+            op,rank=rigid_fit_operator(nodes,mask)
+            piece_fold_ranks[str(name)]=rank
+            piece_total+=op
+        self.passembly=piece_total@after_global
+        after_assembly=after_global-self.passembly
 
-        gather = np.zeros((2*len(anchors), ndof))
-        for k, node in enumerate(anchors):
-            gather[2*k, 2*node] = 1.
-            gather[2*k+1, 2*node+1] = 1.
-        shape_interpolation = np.kron(shape, np.eye(2)) if anchors else np.zeros((ndof, 0))
-        residual_operator = eye-self.pglobal-self.passembly
+        fold_ids={node:i for i,node in enumerate(fold_nodes)}
+        gather=np.zeros((2*len(fold_nodes),ndof))
+        for k,node in enumerate(fold_nodes):
+            gather[2*k,2*node]=1.; gather[2*k+1,2*node+1]=1.
 
-        # Separate inextensional fold-line motion (D proxy) from transverse
-        # extension/shear-like anchor motion (Other). For every detected panel
-        # path, a first-order inextensional D field satisfies
-        #     (u_b-u_a) dot tangent_ab = 0.
-        # The null-space projection uses the same anchor metric as the section.
-        constraints = []
-        for path in paths:
-            aa, bb = anchor_ids[path[0]], anchor_ids[path[-1]]
-            chord = self.xy[path[-1]]-self.xy[path[0]]
-            length = np.linalg.norm(chord)
-            if length <= 1e-30:
+        shape=np.zeros((count,len(fold_nodes)))
+        for node,k in fold_ids.items():
+            shape[node,k]=1.
+        for name,chain in chains.items():
+            marks=[(chain.index(n),n) for n in fold_nodes if n in chain]
+            marks.sort()
+            for (_,aa),(_,bb) in zip(marks,marks[1:]):
+                path=path_between(chain,aa,bb)
+                if len(path)<2:
+                    continue
+                d=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(self.xy[path],axis=0),axis=1))]
+                t=d/max(float(d[-1]),1e-30)
+                shape[path,fold_ids[aa]]=1.-t; shape[path,fold_ids[bb]]=t
+        interpolation=np.kron(shape,np.eye(2))@gather if fold_nodes else np.zeros((ndof,ndof))
+
+        constraints=[]
+        for wall in walls:
+            aa,bb=wall['path'][0],wall['path'][-1]
+            if aa not in fold_ids or bb not in fold_ids:
                 continue
-            tangent = chord/length
-            row = np.zeros(2*len(anchors))
-            row[2*aa:2*aa+2] -= tangent
-            row[2*bb:2*bb+2] += tangent
+            chord=self.xy[bb]-self.xy[aa]; length=np.linalg.norm(chord)
+            if length<=1e-30: continue
+            tangent=chord/length
+            row=np.zeros(2*len(fold_nodes))
+            row[2*fold_ids[aa]:2*fold_ids[aa]+2]-=tangent
+            row[2*fold_ids[bb]:2*fold_ids[bb]+2]+=tangent
             constraints.append(row)
-        anchor_weights = np.repeat(np.sqrt(self.weights[anchors]), 2) if anchors else np.empty(0)
+        fold_weights=np.repeat(np.sqrt(self.weights[fold_nodes]),2) if fold_nodes else np.empty(0)
         if constraints:
-            c = np.vstack(constraints)
-            cw = c/anchor_weights[None, :]
-            unused_u, singular, vt = np.linalg.svd(cw, full_matrices=True)
-            rank = int(np.sum(singular > (singular[0]*1e-10 if len(singular) else 0.)))
-            nullw = vt[rank:].T
-            pd_anchor = (nullw @ nullw.T)*anchor_weights[None, :]/anchor_weights[:, None]
-            po_anchor = np.eye(2*len(anchors))-pd_anchor
+            c=np.vstack(constraints); cw=c/fold_weights[None,:]
+            unused_u,singular,vt=np.linalg.svd(cw,full_matrices=True)
+            crank=int(np.sum(singular>(singular[0]*1e-10 if len(singular) else 0.)))
+            nullw=vt[crank:].T
+            pd=(nullw@nullw.T)*fold_weights[None,:]/fold_weights[:,None]
+            po=np.eye(2*len(fold_nodes))-pd
         else:
-            rank = 0
-            pd_anchor = np.eye(2*len(anchors))
-            po_anchor = np.zeros((2*len(anchors), 2*len(anchors)))
+            crank=0; pd=np.eye(2*len(fold_nodes)); po=np.zeros_like(pd)
 
-        anchor_residual = gather @ residual_operator
-        self.pdist = shape_interpolation @ pd_anchor @ anchor_residual
-        self.pother = shape_interpolation @ po_anchor @ anchor_residual
-        self.plocal = eye-self.pglobal-self.passembly-self.pdist-self.pother
+        fold_residual=gather@after_assembly
+        self.pdist=interpolation@pd@fold_residual
+        self.pother=interpolation@po@fold_residual
+        remainder=eye-self.pwalllocal-self.pglobal-self.passembly-self.pdist-self.pother
+        self.plocal=self.pwalllocal+remainder
 
-        # Compatibility attributes for older diagnostics. qdist is now the
-        # weighted range of the inextensional fold-line operator only.
-        to_weighted = np.diag(self.sqrtw)
-        from_weighted = np.diag(1./self.sqrtw)
-        self.qassembly = orth(to_weighted @ self.passembly @ from_weighted)
-        self.qdist = orth(to_weighted @ self.pdist @ from_weighted)
-        self.qother = orth(to_weighted @ self.pother @ from_weighted)
+        to_weighted=np.diag(self.sqrtw); from_weighted=np.diag(1./self.sqrtw)
+        self.qassembly=orth(to_weighted@self.passembly@from_weighted)
+        self.qdist=orth(to_weighted@self.pdist@from_weighted)
+        self.qother=orth(to_weighted@self.pother@from_weighted)
+        self.qlocal=orth(to_weighted@self.plocal@from_weighted)
 
-        self.flat_fraction = float(flat_length/max(total_length, 1e-30))
-        piece_ranks_ok = all(rank >= 3 for rank in piece_anchor_ranks.values())
-        self.supported = bool(
-            len(anchors) >= 2 and global_anchor_rank >= 3 and piece_ranks_ok and
-            len(visited) == len(edges) and all(adjacency) and
-            np.linalg.matrix_rank(self.plocal) >= 2)
-        self.metadata = dict(anchor_nodes=anchors, corner_angle_deg=corner_angle,
-            flat_panel_length_fraction=self.flat_fraction, geometry_supported=self.supported,
-            curved_panel_proxy=self.flat_fraction < .6,
-            global_anchor_rank=global_anchor_rank, piece_anchor_ranks=piece_anchor_ranks,
+        piece_ranks_ok=all(rank>=3 for rank in piece_fold_ranks.values())
+        self.supported=bool(len(walls)>=2 and len(fold_nodes)>=2 and global_fold_rank>=3 and
+                            piece_ranks_ok and all(chains.values()) and len(local_rows)>0)
+        self.flat_fraction=float(sum(wall_lengths)/max(perimeter,1e-30))
+        self.metadata=dict(
+            fold_nodes=fold_nodes, physical_wall_count=len(walls),
+            physical_walls=[dict(piece=w['piece'],start=w['path'][0],end=w['path'][-1],
+                                 node_count=len(w['path']),length_mm=float(np.sum(np.linalg.norm(
+                                 np.diff(self.xy[w['path']],axis=0),axis=1)))) for w in walls],
+            wall_source=source, wall_angle_deg=wall_angle_deg,
+            flat_panel_length_fraction=self.flat_fraction,
+            geometry_supported=self.supported,
+            curved_panel_proxy=False if source=='builtup_segments.csv' else self.flat_fraction<.6,
+            global_anchor_rank=global_fold_rank, piece_anchor_ranks=piece_fold_ranks,
             global_rank=self.qglobal.shape[1], assembly_rank=self.qassembly.shape[1],
             coarse_deformation_rank=self.qdist.shape[1], other_extension_rank=self.qother.shape[1],
-            panel_extension_constraint_rank=rank,
-            residual_rank=int(np.linalg.matrix_rank(self.plocal)),
-            maximum_panel_arc_length=float(max(panel_lengths) if panel_lengths else 0.),
-            split_definition='anchor-driven G + piece-rigid A + extension-like O + inextensional fold-line D + within-panel L')
+            local_rank=self.qlocal.shape[1], wall_bending_rank=int(np.linalg.matrix_rank(self.pwalllocal)),
+            panel_extension_constraint_rank=crank,
+            maximum_panel_arc_length=float(max(wall_lengths) if wall_lengths else 0.),
+            split_definition='moving-chord wall-bending L first; then fold-driven G/A/O/D; exact closure remainder returned to L')
 
     def _weighted_components(self, coefficients):
-        y = np.asarray(coefficients, dtype=float)
-        original_shape = y.shape
-        y = y.reshape(-1, len(self.sqrtw))
-        x = y/self.sqrtw[None, :]
+        y=np.asarray(coefficients,dtype=float)
+        original_shape=y.shape
+        y=y.reshape(-1,len(self.sqrtw)); x=y/self.sqrtw[None,:]
         def apply(operator):
-            return (x @ operator.T)*self.sqrtw[None, :]
-        parts = dict(G=apply(self.pglobal), A=apply(self.passembly), O=apply(self.pother),
-                     D=apply(self.pdist), L=apply(self.plocal))
+            return (x@operator.T)*self.sqrtw[None,:]
+        parts=dict(G=apply(self.pglobal),A=apply(self.passembly),O=apply(self.pother),
+                   D=apply(self.pdist),L=apply(self.plocal))
         for key in parts:
-            parts[key] = parts[key].reshape(original_shape)
+            parts[key]=parts[key].reshape(original_shape)
         return parts
 
     def component_diagnostics_weighted(self, weighted_coefficients):
-        parts = self._weighted_components(weighted_coefficients)
-        norms = {k: float(np.sum(v*v)) for k, v in parts.items()}
-        ldg = norms['L']+norms['D']+norms['G']
-        all_self = ldg+norms['A']+norms['O']
-        reconstruction = sum(parts.values())
-        y = np.asarray(weighted_coefficients, dtype=float)
+        parts=self._weighted_components(weighted_coefficients)
+        norms={k:float(np.sum(v*v)) for k,v in parts.items()}
+        ldg=norms['L']+norms['D']+norms['G']; all_self=ldg+norms['A']+norms['O']
+        reconstruction=sum(parts.values()); y=np.asarray(weighted_coefficients,dtype=float)
+        x=(y.reshape(-1,len(self.sqrtw))/self.sqrtw[None,:])
+        curvature=float(np.sum((x@self.curvature_matrix.T)**2)) if self.curvature_matrix.size else 0.
         return dict(
-            global_percent=100*norms['G']/max(ldg, 1e-250),
-            distortional_percent=100*norms['D']/max(ldg, 1e-250),
-            local_percent=100*norms['L']/max(ldg, 1e-250),
-            assembly_percent=100*norms['A']/max(all_self, 1e-250),
-            other_percent=100*norms['O']/max(all_self, 1e-250),
-            reconstruction_relative_error=float(np.linalg.norm(y-reconstruction)/max(np.linalg.norm(y), 1e-250)),
-            component_norm_sum_over_input=float(all_self/max(float(np.sum(y*y)), 1e-250)))
+            global_percent=100*norms['G']/max(ldg,1e-250),
+            distortional_percent=100*norms['D']/max(ldg,1e-250),
+            local_percent=100*norms['L']/max(ldg,1e-250),
+            assembly_percent=100*norms['A']/max(all_self,1e-250),
+            other_percent=100*norms['O']/max(all_self,1e-250),
+            wall_curvature_index=curvature/max(float(np.sum(x*x)),1e-250),
+            reconstruction_relative_error=float(np.linalg.norm(y-reconstruction)/max(np.linalg.norm(y),1e-250)),
+            component_norm_sum_over_input=float(all_self/max(float(np.sum(y*y)),1e-250)))
 
     def component_diagnostics(self, coefficients):
-        # Historical SectionProjector API receives unweighted section values.
-        x = np.asarray(coefficients, dtype=float)
-        weighted = (x.reshape(-1, len(self.sqrtw))*self.sqrtw[None, :]).reshape(x.shape)
+        x=np.asarray(coefficients,dtype=float)
+        weighted=(x.reshape(-1,len(self.sqrtw))*self.sqrtw[None,:]).reshape(x.shape)
         return self.component_diagnostics_weighted(weighted)
 
     def shares(self, coefficients):
-        d = self.component_diagnostics(coefficients)
-        return [d['global_percent']/100., d['distortional_percent']/100., d['local_percent']/100.]
+        d=self.component_diagnostics(coefficients)
+        return [d['global_percent']/100.,d['distortional_percent']/100.,d['local_percent']/100.]
 
     def audit_shares(self, weighted_coefficients):
-        d = self.component_diagnostics_weighted(weighted_coefficients)
-        return [d['local_percent'], d['distortional_percent'], d['global_percent']]
+        d=self.component_diagnostics_weighted(weighted_coefficients)
+        return [d['local_percent'],d['distortional_percent'],d['global_percent']]
 
     def audit_components(self, weighted_coefficients):
-        p = self._weighted_components(weighted_coefficients)
-        return [p['L'], p['D'], p['G'], p['A'], p['O']]
+        p=self._weighted_components(weighted_coefficients)
+        return [p['L'],p['D'],p['G'],p['A'],p['O']]
 
 
 def family_label(shares, supported, threshold=.9, poor_fit=False,
