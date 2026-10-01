@@ -9,6 +9,9 @@ Recover an existing run without solving again:
 abaqus python abaqus_complete_model_m20.py --resume-post "existing run folder"
 Postprocessing uses abaqus_modal_wavelengths.py and then abaqus_modal_report.py
 beside this script. Keep all three files together when moving the workflow.
+The automatic buckling pipeline stores only the nodal mode-shape output needed
+for wavelength/family classification; shell S/E/SF/SE energy fields are not
+requested because they do not participate in the current L/D/G classifier.
 Command-line options override the defaults below for the entire pipeline.
 MESH_MM is the target in both directions; bolt rows and ends stay exact.
 BUILTUP_DIR is the source of geometry, material, thickness, member length,
@@ -88,7 +91,7 @@ def parse_arguments(argv=None):
     parser.add_argument('--max-iterations', type=int, default=MAX_ITERATIONS)
     parser.add_argument('--cpus', type=int, default=8)
     parser.add_argument('--buckle-output', choices=('standard', 'detailed'), default='standard',
-                        help='detailed adds modal S, E, SF and SE; increases ODB size')
+                        help='Legacy compatibility option. Automatic buckling now always stores classification-only nodal mode shapes; detailed no longer adds S/E/SF/SE.')
     parser.add_argument('--nodal-precision', choices=('full', 'single'), default='full',
                         help='Nodal ODB storage precision; does not change eigensolver accuracy')
     output_options = parser.add_mutually_exclusive_group()
@@ -212,22 +215,6 @@ def enhanced_arguments(report):
     return [os.path.splitext(report['odb'])[0]+'_modal_wavelengths_report.json']
 
 
-def complete_shell_report(run_dir, audit_dir, summary):
-    import abaqus_modal_shell_energy as shell
-    missing = shell.REQUIRED-set(summary.get('fields_available_in_all_modes', []))
-    if missing:
-        return dict(status='UNAVAILABLE_MISSING_DETAILED_FIELDS', missing_fields=sorted(missing))
-    output = os.path.join(audit_dir, 'shell_energy')
-    progress('SHELL ENERGY: membrane, bending, transverse shear and spatial localization.')
-    try:
-        result = shell.process(run_dir, output, audit_dir=audit_dir)
-    except ValueError as error:
-        progress('SHELL ENERGY unavailable: '+str(error))
-        return dict(status='UNAVAILABLE_VALIDATION_FAILED', reason=str(error))
-    return dict(status='COMPLETED', output_dir=output, modes_processed=result['modes_processed'],
-                html=os.path.join(output, 'shell_energy_report.html'))
-
-
 def run_modal_audit(run_dir):
     import importlib.util
     path = os.path.join(SCRIPT_DIR, 'abaqus_dsm_modal_audit.py')
@@ -240,8 +227,7 @@ def run_modal_audit(run_dir):
     summary = audit.process(audit.parse_arguments(['--run-dir', run_dir, '--output-dir', output]))
     return dict(output_dir=output, html=os.path.join(output, 'modal_explorer.html'),
                 eigenspace_validation=os.path.join(output, 'eigenspace_validation.html'),
-                mesh_shape_archive=summary.get('mesh_shape_archive'),
-                shell_energy=complete_shell_report(run_dir, output, summary))
+                mesh_shape_archive=summary.get('mesh_shape_archive'))
 
 
 def resume_postprocessing(run_dir, modal_audit=False):
@@ -618,12 +604,11 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     assert len(model.boundaryConditions) == 9
     for name in list(model.fieldOutputRequests.keys()):
         del model.fieldOutputRequests[name]
+    # Classification/wavelength processing needs the nodal eigenmode shape only.
+    # Do not request S/E/SF/SE at every shell section point: those fields are
+    # not used by the current Local/Distortional/Global classifier and can
+    # dominate ODB size and postprocessing time for hundreds of modes.
     model.FieldOutputRequest(name='ModeShapes', createStepName='Buckle', variables=('U',))
-    # U field output includes UR at rotational nodes. Element quantities in a
-    # Buckle step are normalized perturbation shapes, not loaded-state stresses.
-    if buckle_output == 'detailed':
-        model.FieldOutputRequest(name='ModalShellDiagnostics', createStepName='Buckle',
-                                 variables=('S', 'E', 'SF', 'SE'), sectionPoints=(1, 2, 3, 4, 5))
     for name in list(model.historyOutputRequests.keys()):
         del model.historyOutputRequests[name]
     job.writeInput(consistencyChecking=ON)
@@ -644,9 +629,12 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         tangential='FRICTIONLESS', allow_separation=True,
         buckle_limitation='Contact status fixed at the base state')
     report['source_inputs'] = input_summary(inputs)
-    report['modal_output'] = dict(profile=buckle_output, nodal_precision=nodal_precision,
-        fields=['U', 'UR']+(['S', 'E', 'SF', 'SE'] if buckle_output == 'detailed' else []),
-        convention='Normalized perturbation shapes; extra fields do not identify mechanical families or absolute modal energy')
+    report['modal_output'] = dict(
+        profile='classification_only', requested_legacy_profile=buckle_output,
+        nodal_precision=nodal_precision, fields=['U'],
+        mode_shape_components='U field used for transverse nodal eigenmode shapes; shell rotations are not required by the classifier',
+        deliberately_omitted_fields=['S', 'E', 'SF', 'SE'],
+        convention='Normalized perturbation mode shapes only; shell stress/strain/force energy diagnostics are intentionally not stored in the automatic buckling stage')
     with open(MODEL_NAME+'_build.json', 'w') as f:
         json.dump(report, f, indent=2)
     print('BUILD COMPLETE: CAE and INP saved. No analysis submitted yet. '+str(report))
@@ -664,6 +652,8 @@ def main(argv=None):
     validate_settings()
     inputs = read_model_inputs(BUILTUP_DIR)
     settings = vars(args).copy()
+    settings['effective_buckle_output'] = 'classification_only_U'
+    settings['automatic_shell_energy'] = False
     if args.check_inputs:
         print(json.dumps(dict(settings=settings, source_inputs=input_summary(inputs)), indent=2))
         return
@@ -691,6 +681,8 @@ def main(argv=None):
         progress('Output directory: '+output_dir)
         progress('Settings: '+json.dumps(settings, sort_keys=True))
         progress('1/4 BUILD: geometry, mesh, contact, CAE and INP.')
+        if args.buckle_output == 'detailed':
+            progress('NOTE: --buckle-output detailed is retained only for command compatibility; S/E/SF/SE are no longer requested in this buckling stage.')
         job, report = build(inputs=inputs, cpus=args.cpus,
                             buckle_output=args.buckle_output, nodal_precision=args.nodal_precision)
         state['build'] = report
