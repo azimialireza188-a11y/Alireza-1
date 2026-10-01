@@ -252,10 +252,12 @@ class SectionProjector:
 
 def family_label(shares, supported, threshold=.9, poor_fit=False,
                  assembly_percent=0., max_assembly_percent=25.):
-    if sum(shares) <= 0 or poor_fit:
+    if poor_fit:
         return 'Unresolved'
     if assembly_percent >= max_assembly_percent:
         return 'Assembly-like'
+    if sum(shares) <= 0:
+        return 'Unresolved'
     if shares[0] >= threshold:
         return 'Global-like'
     if not supported:
