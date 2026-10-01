@@ -46,7 +46,7 @@ def relative_piece_basis(projector, pieces):
 
 
 def rigid_shares(vector, projector, qrelative=None):
-    d = projector.component_diagnostics(np.asarray(vector))
+    d = projector.component_diagnostics_weighted(np.asarray(vector))
     # Preserve the historical three diagnostic names while making their
     # semantics explicit: internal = true fold-line distortion + local plate
     # deformation, not piece-rigid assembly motion.
