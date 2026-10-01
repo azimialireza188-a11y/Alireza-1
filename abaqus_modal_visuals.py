@@ -10,7 +10,8 @@ import math
 import os
 import numpy as np
 
-COLORS = {'L': '#18a477', 'D': '#e89b32', 'G': '#4489e8', 'Mixed': '#a36ede', 'Unresolved': '#8492a5'}
+COLORS = {'L': '#18a477', 'D': '#e89b32', 'G': '#4489e8', 'Assembly': '#b060c8',
+          'Mixed': '#a36ede', 'Unresolved': '#8492a5'}
 
 
 def common_grid(tracks, tolerance):
@@ -34,34 +35,35 @@ def weighted_raw(values, longitudinal_weights, sqrt_section_weights):
 
 
 def section_percentages(vector, projector):
-    y = np.asarray(vector).reshape(-1, len(projector.sqrtw))
-    g = y @ projector.qglobal; d = y @ projector.qdist
-    r = y-g @ projector.qglobal.T-d @ projector.qdist.T
-    values = np.array([np.sum(r*r), np.sum(d*d), np.sum(g*g)])
-    return (100*values/max(values.sum(), 1e-250)).tolist()
+    """Return audit order L/D/G using the anchor-driven projector."""
+    return projector.audit_shares(np.asarray(vector))
 
 
 def relative_piece_basis(projector, pieces):
-    from abaqus_modal_report import orth
-    xy = projector.xy-np.mean(projector.xy, axis=0)
-    rigid = np.zeros((len(xy), 2, 3))
-    rigid[:, 0, 0] = 1; rigid[:, 1, 1] = 1
-    rigid[:, 0, 2] = -xy[:, 1]; rigid[:, 1, 2] = xy[:, 0]
-    columns = [rigid.reshape(-1, 3)*np.repeat(np.asarray(pieces) == name, 2)[:, None]
-               for name in sorted(set(pieces))]
-    b = np.column_stack(columns)*projector.sqrtw[:, None]
-    b -= projector.qglobal @ (projector.qglobal.T @ b)
-    return orth(b)
+    # Compatibility helper.  Assembly motion is now an explicit operator/range
+    # rather than part of qdist.
+    return getattr(projector, 'qassembly', np.empty((len(projector.sqrtw), 0)))
 
 
-def rigid_shares(vector, projector, qrelative):
-    y = np.asarray(vector).reshape(-1, len(projector.sqrtw))
-    g = y @ projector.qglobal; r = y @ qrelative
-    internal = y-g @ projector.qglobal.T-r @ qrelative.T
-    values = np.array([np.sum(g*g), np.sum(r*r), np.sum(internal*internal)])
-    values *= 100/max(values.sum(), 1e-250)
-    return dict(zip(('whole_section_rigid_percent', 'relative_piece_rigid_percent',
-                     'within_piece_deformation_percent'), values.tolist()))
+def rigid_shares(vector, projector, qrelative=None):
+    d = projector.component_diagnostics(np.asarray(vector))
+    # Preserve the historical three diagnostic names while making their
+    # semantics explicit: internal = true fold-line distortion + local plate
+    # deformation, not piece-rigid assembly motion.
+    g = d['global_percent']
+    a = d['assembly_percent']
+    # Re-normalize these three diagnostics to a common G/A/internal total.
+    parts = projector._weighted_components(np.asarray(vector))
+    norms = {k: float(np.sum(v*v)) for k, v in parts.items()}
+    total = max(sum(norms.values()), 1e-250)
+    return dict(
+        whole_section_rigid_percent=100*norms['G']/total,
+        relative_piece_rigid_percent=100*norms['A']/total,
+        within_piece_deformation_percent=100*(norms['D']+norms['L'])/total,
+        local_within_ldg_percent=d['local_percent'],
+        distortional_within_ldg_percent=d['distortional_percent'],
+        assembly_percent=d['assembly_percent'],
+        reconstruction_relative_error=d['reconstruction_relative_error'])
 
 
 def sensitivity(shares, dominance):
@@ -90,11 +92,124 @@ def mode_preview(u, tracks, transverse, origin, length):
                 convention='25 visual slices + peak station; linear interpolation on each ODB track. Numeric shares use all eligible nodes.')
 
 
+def write_critical_stress_wavelength(output_dir, summary):
+    """Publication-style fixed-length modal scatter/envelopes.
+
+    This is intentionally NOT called a classical signature curve.  Each point
+    is an Abaqus eigenmode sample at the member's fixed length; the x coordinate
+    is the dominant longitudinal half-wavelength extracted from that mode.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    rows = [r for r in summary['modes'] if r.get('half_wavelength_mm') and
+            r['half_wavelength_mm'] > 0 and
+            (r.get('stress_MPa') if summary.get('sigma_ref_MPa') else r.get('eigenvalue')) is not None]
+    if not rows:
+        return []
+    value = 'stress_MPa' if summary.get('sigma_ref_MPa') else 'eigenvalue'
+    ylabel = 'Critical stress (MPa)' if value == 'stress_MPa' else 'Eigenvalue multiplier'
+
+    fig, ax = plt.subplots(figsize=(15, 7.5))
+    markers = {'L': 'o', 'D': '^', 'G': 's', 'Assembly': 'D', 'Mixed': 'v', 'Unresolved': 'x'}
+    labels = {'L': 'Abaqus modes: Local', 'D': 'Abaqus modes: Distortional',
+              'G': 'Abaqus modes: Global', 'Assembly': 'Abaqus modes: Assembly-like',
+              'Mixed': 'Abaqus modes: Mixed', 'Unresolved': 'Abaqus modes: Unresolved'}
+    for family in ('L', 'D', 'G', 'Assembly', 'Mixed', 'Unresolved'):
+        subset = [r for r in rows if r['family'] == family]
+        if subset:
+            ax.scatter([r['half_wavelength_mm'] for r in subset], [r[value] for r in subset],
+                       s=30, marker=markers[family], facecolors='none' if family != 'Unresolved' else COLORS[family],
+                       edgecolors=COLORS[family], linewidths=.9, alpha=.9, label=labels[family])
+
+    grouped = {}
+    for r in rows:
+        key = r.get('dominant_halfwaves')
+        if key is None:
+            key = round(math.log(max(r['half_wavelength_mm'], 1e-30)), 6)
+        grouped.setdefault(key, []).append(r)
+    envelope = [min(group, key=lambda r: r[value]) for unused, group in
+                sorted(grouped.items(), key=lambda kv: min(x['half_wavelength_mm'] for x in kv[1]), reverse=True)]
+    envelope.sort(key=lambda r: r['half_wavelength_mm'])
+    ax.plot([r['half_wavelength_mm'] for r in envelope], [r[value] for r in envelope],
+            color='#e87500', lw=1.8, label='Abaqus: lowest computed mode per half-wave')
+
+    # Family minima are shown without implying that a geometric proxy is a
+    # mechanically validated DSM Fcr.
+    for family in ('L', 'D', 'G'):
+        subset = [r for r in rows if r['family'] == family]
+        if subset:
+            r = min(subset, key=lambda x: x[value])
+            ax.scatter([r['half_wavelength_mm']], [r[value]], s=55, color=COLORS[family], zorder=5)
+            ax.annotate('%s min %.1f @ %.0f' % (family, r[value], r['half_wavelength_mm']),
+                        (r['half_wavelength_mm'], r[value]), xytext=(6, -14),
+                        textcoords='offset points', fontsize=8, color=COLORS[family])
+
+    panel = (summary.get('proxy_geometry') or {}).get('maximum_panel_arc_length')
+    if panel and panel > 0:
+        ax.axvline(panel, color='#777777', ls=':', lw=.9,
+                   label='max detected panel arc %.0f mm' % panel)
+
+    ax.set_xscale('log')
+    ax.set_xlabel('Dominant half-wavelength (mm)')
+    ax.set_ylabel(ylabel)
+    ax.set_title('Critical stress vs dominant half-wavelength | fixed-length Abaqus modal samples')
+    ax.grid(True, which='both', alpha=.22)
+    ax.legend(loc='best', fontsize=8)
+    fig.text(.06, .015,
+             'L/D/G are anchor-driven geometric screening labels unless a validated mechanical basis is supplied. '
+             'Assembly-like motion is not forced into Distortional. This is not a classical CUFSM signature curve.',
+             fontsize=8)
+    fig.tight_layout(rect=(0, .035, 1, 1))
+    paths = []
+    for ext in ('png', 'pdf'):
+        path = os.path.join(output_dir, 'critical_stress_vs_half_wavelength.'+ext)
+        fig.savefig(path, dpi=180)
+        paths.append(path)
+    plt.close(fig)
+
+    # Second view: one lower envelope per family, visually analogous to an L/D/G
+    # signature plot but explicitly based on available fixed-length modes.
+    fig, ax = plt.subplots(figsize=(14, 7.5))
+    for family in ('L', 'D', 'G'):
+        subset = [r for r in rows if r['family'] == family]
+        if not subset:
+            continue
+        fam_groups = {}
+        for r in subset:
+            key = r.get('dominant_halfwaves')
+            if key is None:
+                key = round(math.log(max(r['half_wavelength_mm'], 1e-30)), 6)
+            fam_groups.setdefault(key, []).append(r)
+        env = [min(g, key=lambda r: r[value]) for g in fam_groups.values()]
+        env.sort(key=lambda r: r['half_wavelength_mm'])
+        ax.plot([r['half_wavelength_mm'] for r in env], [r[value] for r in env],
+                marker='o', ms=3, lw=1.4, color=COLORS[family],
+                label={'L':'L (local proxy)','D':'D (distortional proxy)','G':'G (global proxy)'}[family])
+    ax.set_xscale('log')
+    if all(r[value] > 0 for r in rows):
+        ax.set_yscale('log')
+    ax.set_xlabel('Dominant half-wavelength (mm)')
+    ax.set_ylabel(ylabel)
+    ax.set_title('Family lower envelopes from available Abaqus modes (not a classical signature curve)')
+    ax.grid(True, which='both', alpha=.22)
+    ax.legend()
+    fig.tight_layout()
+    for ext in ('png', 'pdf'):
+        path = os.path.join(output_dir, 'family_half_wavelength_envelopes.'+ext)
+        fig.savefig(path, dpi=180)
+        paths.append(path)
+    plt.close(fig)
+    return paths
+
+
+
 def write_visuals(output_dir, summary, previews, geometry, spectra):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     rows = summary['modes']; x = [r['mode'] for r in rows]
+    write_critical_stress_wavelength(output_dir, summary)
     proxy = not bool(summary['basis_metadata'])
     title = 'Geometric screening proxies (not validated L/D/G or energy shares)' if proxy else 'Supplied mechanical basis | see validation gates'
     fig, axes = plt.subplots(2, 2, figsize=(15, 10))
