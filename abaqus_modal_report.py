@@ -59,11 +59,12 @@ class SectionProjector:
 
       G: whole-section rigid motion fitted only to anchors,
       A: independent rigid motion of each physical piece after removing G,
-      D: linear panel interpolation of the remaining anchor translations,
-      L: nodal remainder after G + A + D.
+      O: panel chord extension / shear-like anchor motion (non-DSM Other),
+      D: inextensional fold-line motion after removing G, A and O,
+      L: nodal remainder after G + A + O + D.
 
-    A is intentionally separate from DSM L/D/G.  L/D/G percentages normalize
-    only G, D and L self-norms; assembly participation is reported separately.
+    A and O are intentionally separate from DSM L/D/G. L/D/G percentages normalize
+    only G, D and L self-norms; assembly/other participation is reported separately.
     The split is linear, so it can also be applied to a rotated eigenspace.
     """
 
