@@ -652,6 +652,8 @@ def main(argv=None):
     validate_settings()
     inputs = read_model_inputs(BUILTUP_DIR)
     settings = vars(args).copy()
+    settings['effective_buckle_output'] = 'classification_only_U'
+    settings['automatic_shell_energy'] = False
     if args.check_inputs:
         print(json.dumps(dict(settings=settings, source_inputs=input_summary(inputs)), indent=2))
         return
