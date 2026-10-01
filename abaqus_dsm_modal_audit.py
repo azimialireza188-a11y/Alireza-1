@@ -470,9 +470,11 @@ def process(args):
                 energy = None
                 direct_diagnostics = visuals.rigid_shares(vector, proxy, qrelative)
             label = classify(projected, args.dominance, args.max_residual)
-            if (not mechanical and direct_diagnostics and
-                    direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent):
-                label = 'Assembly'
+            if not mechanical and direct_diagnostics:
+                if direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent:
+                    label = 'Assembly'
+                elif direct_diagnostics.get('other_percent', 0.) >= args.max_other_percent:
+                    label = 'Other'
             flags = []
             if mechanical and projected['condition'] > 1e3:
                 flags.append('ILL_CONDITIONED_COMPONENT_FIT')
@@ -486,6 +488,8 @@ def process(args):
                     label = 'Unresolved'; flags.append('PANEL_DEFINITION_SENSITIVE')
                 if direct_diagnostics and direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent:
                     label = 'Assembly'; flags.append('ASSEMBLY_RIGID_MOTION_DOMINANT')
+                elif direct_diagnostics and direct_diagnostics.get('other_percent', 0.) >= args.max_other_percent:
+                    label = 'Other'; flags.append('OTHER_TRANSVERSE_EXTENSION_DOMINANT')
                 if raw_vector is None:
                     flags.append('NONALIGNED_STATIONS_FITTED_METRIC_FALLBACK')
                 if coverage < .99:
@@ -534,8 +538,8 @@ def process(args):
                     residual = projection['residual']*mechanical.sqrtw[:, None]
                     bounds['maximum_relative_residual'] = float(np.sqrt(max(0., np.linalg.eigvalsh(residual.T@residual)[-1])))
                 else:
-                    bounds = validation.proxy_cluster(vectors, proxy, args.dominance, args.max_assembly_percent)
-                    angle_bounds = [validation.proxy_cluster(vectors, p, args.dominance, args.max_assembly_percent) for p in variants]
+                    bounds = validation.proxy_cluster(vectors, proxy, args.dominance, args.max_assembly_percent, args.max_other_percent)
+                    angle_bounds = [validation.proxy_cluster(vectors, p, args.dominance, args.max_assembly_percent, args.max_other_percent) for p in variants]
                     angle_sensitive = (len(set(b['stable_family'] for b in angle_bounds+[bounds])) > 1 or
                         any(np.max(np.ptp([b[k] for b in angle_bounds+[bounds]], axis=0)) > args.max_sensitivity_pp
                             for k in ('min_percent', 'max_percent')))
@@ -619,7 +623,8 @@ def process(args):
             'Family percentages are metric/basis dependent, not portions of critical load.',
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
             'Independent rigid motion of built-up pieces is reported as Assembly and is not counted as Distortional.',
-            'Geometric D is driven by fold-line/anchor translation; L is within-panel remainder after G/A/D.',
+            'Anchor transverse extension is reported as Other and is not counted as Distortional.',
+            'Geometric D is driven by inextensional fold-line/anchor translation; L is within-panel remainder after G/A/O/D.',
             'L/D/G family energy requires compatible full elastic K and all retained DOFs; signed cross terms must not be discarded.',
             'SUPPLIED review/reference evidence is recorded, not independently certified by this program.',
             'No conclusion of family absence or DSM applicability follows from missing candidates.'])
@@ -649,7 +654,7 @@ def write_outputs(output_dir, summary):
         'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
         'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
         'energy_cross_terms_percent', 'spectral_fit_error', 'dominant_spectral_share', 'transverse_share',
-        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'flags',
+        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'flags',
         'eigenspace_stable_family', 'eigenspace_L_min', 'eigenspace_L_max', 'eigenspace_D_min',
         'eigenspace_D_max', 'eigenspace_G_min', 'eigenspace_G_max']
     with open(os.path.join(output_dir, 'modal_percentages.csv'), 'w', newline='', encoding='utf-8-sig') as stream:
@@ -661,6 +666,7 @@ def write_outputs(output_dir, summary):
             flat['sensitivity_range_pp'] = (row.get('sensitivity') or {}).get('max_range_pp')
             flat['relative_piece_rigid_percent'] = (row.get('rigid_diagnostics') or {}).get('relative_piece_rigid_percent')
             flat['assembly_percent'] = (row.get('rigid_diagnostics') or {}).get('assembly_percent')
+            flat['other_percent'] = (row.get('rigid_diagnostics') or {}).get('other_percent')
             if row.get('eigenspace_bounds'):
                 for j, f in enumerate(FAMILIES):
                     for bound in ('min', 'max'):
@@ -744,6 +750,8 @@ def parse_arguments(argv=None):
     p.add_argument('--max-sensitivity-pp', type=float, default=10., help='Panel-angle sensitivity limit in percentage points, not a probability')
     p.add_argument('--max-assembly-percent', type=float, default=25.,
                    help='Above this piece-rigid self-norm share, do not force the mode into DSM L/D/G')
+    p.add_argument('--max-other-percent', type=float, default=25.,
+                   help='Above this transverse-extension self-norm share, do not force the mode into DSM L/D/G')
     args = p.parse_args(argv)
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
     if args.curve_reference:
@@ -759,6 +767,8 @@ def parse_arguments(argv=None):
         p.error('--max-sensitivity-pp must be in (0, 100]')
     if not math.isfinite(args.max_assembly_percent) or not 0 < args.max_assembly_percent < 100:
         p.error('--max-assembly-percent must be in (0, 100)')
+    if not math.isfinite(args.max_other_percent) or not 0 < args.max_other_percent < 100:
+        p.error('--max-other-percent must be in (0, 100)')
     if os.path.exists(args.output_dir) and (not os.path.isdir(args.output_dir) or os.listdir(args.output_dir)):
         p.error('Output directory must be new or empty; choose --output-dir for another audit')
     return args
