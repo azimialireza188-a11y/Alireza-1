@@ -1,7 +1,7 @@
 name: modal-classification-ci
 on:
-  push:
-    branches: [fix/local-distortional-classification]
+  pull_request:
+    branches: [main]
 jobs:
   tests:
     runs-on: ubuntu-latest
