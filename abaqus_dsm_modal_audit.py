@@ -327,7 +327,7 @@ def read_mapped_mode(frame, keys):
     return result
 
 
-def proxy_geometry(base, enhanced, odb, metadata):
+def proxy_geometry(base, enhanced, odb, metadata, build):
     axis = 'xyz'.index(metadata['axis'])
     transverse = [j for j in range(3) if j != axis]
     names = [m['instance'] for m in metadata['instances']]
@@ -350,8 +350,10 @@ def proxy_geometry(base, enhanced, odb, metadata):
                     ia, ib = node_to_track[lookup[ka]], node_to_track[lookup[kb]]
                     if ia != ib:
                         edges.add(tuple(sorted((ia, ib))))
+    physical_segments=(build.get('source_inputs') or {}).get('section_segments')
     projector = enhanced.SectionProjector(xy, sorted(edges), [t['instance'] for t in tracks],
-                                           [t['weight'] for t in tracks])
+                                           [t['weight'] for t in tracks],
+                                           physical_segments=physical_segments)
     group_tracks = [[node_to_track[int(i)] for i in group['indices'][0]] for group in groups]
     return dict(axis=axis, transverse=transverse, tracks=tracks, keys=keys, lookup=lookup,
                 tables=base.label_tables(keys), groups=groups, group_tracks=group_tracks,
@@ -416,7 +418,7 @@ def process(args):
     basis_meta, stiffness, mechanical, mapped_keys = {}, None, None, None
     mode_vectors, results, clusters, previews, full_shapes = {}, [], [], [], []
     try:
-        geo = proxy_geometry(base, enhanced, odb, metadata)
+        geo = proxy_geometry(base, enhanced, odb, metadata, build)
         if args.basis:
             mechanical, mapped_keys, stiffness, basis_meta = load_basis(args.basis, odb, odb_hash, signature)
         frames = {base.frame_eigen(f)[0]: f for f in odb.steps[metadata['step']].frames if base.frame_eigen(f)}
@@ -426,8 +428,10 @@ def process(args):
         proxy = geo['projector']
         pieces = [t['instance'] for t in geo['tracks']]
         grid = visuals.common_grid(geo['tracks'], geo['tolerance'])
+        physical_segments=(build.get('source_inputs') or {}).get('section_segments')
         variants = [enhanced.SectionProjector(geo['xy'], geo['edges'], pieces,
-                    [t['weight'] for t in geo['tracks']], corner_angle=angle) for angle in (10., 25.)]
+                    [t['weight'] for t in geo['tracks']], corner_angle=angle,
+                    physical_segments=physical_segments) for angle in (10., 25.)]
         qrelative = visuals.relative_piece_basis(proxy, pieces)
         coverage = min(m['coverage'] for m in geo['mesh'])
         proxy_layers = len(grid['z']) if grid is not None else geo['cap']
