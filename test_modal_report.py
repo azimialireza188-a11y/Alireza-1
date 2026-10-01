@@ -44,13 +44,38 @@ class ModalReportTests(unittest.TestCase):
         self.assertEqual(report.family_label([.1, .1, .8], False), 'Unresolved')
         self.assertEqual(report.family_label([.9, .05, .05], False), 'Global-like')
 
-    def test_curved_panel_gets_explicit_proxy_warning(self):
+    def test_curved_mesh_without_physical_walls_is_conservative(self):
         xy = self.xy.copy()
         xy[:, 1] = .04*(xy[:, 0]-5.)**2
         fit = report.SectionProjector(xy, self.edges, ['P']*9, np.ones(9))
-        self.assertTrue(fit.supported)
-        self.assertTrue(fit.metadata['curved_panel_proxy'])
-        self.assertIn('maximum_panel_arc_length', fit.metadata)
+        self.assertEqual(fit.metadata['wall_source'], 'mesh_straight_runs')
+        self.assertTrue(fit.metadata['curved_panel_proxy'] or not fit.supported)
+
+    def test_physical_wall_geometry_overrides_radius_mesh_bias(self):
+        # Two long physical walls connected by a short radius-like transition.
+        xy = np.array([[0.,0.],[2.5,0.],[5.,0.],[7.5,0.],[10.,0.],
+                       [10.7,.3],[11.,1.],[11.,3.],[11.,5.],[11.,7.],[11.,9.]])
+        edges=[(i,i+1) for i in range(len(xy)-1)]
+        segs={'P': [[0.,0.,10.,0.],
+                    [10.,0.,10.7,.3],[10.7,.3,11.,1.],
+                    [11.,1.,11.,9.]]}
+        fit=report.SectionProjector(xy,edges,['P']*len(xy),np.ones(len(xy)),
+                                    physical_segments=segs)
+        self.assertEqual(fit.metadata['wall_source'],'builtup_segments.csv')
+        self.assertGreaterEqual(fit.metadata['physical_wall_count'],2)
+        # Local bending on the first wall with moving end folds must remain Local.
+        u=np.zeros((len(xy),2))
+        t=np.linspace(0.,1.,5)
+        u[:5,1]=2.*t + np.sin(np.pi*t)
+        d=fit.component_diagnostics(u)
+        self.assertGreater(d['local_percent'],50.)
+        self.assertGreater(d['wall_curvature_index'],0.)
+
+    def test_linear_moving_chord_is_not_local(self):
+        u=np.zeros((9,2))
+        u[:,1]=np.linspace(-2.,3.,9)
+        d=self.fit.component_diagnostics(u)
+        self.assertLess(d['local_percent'],1e-8)
 
     def test_mixed_family_is_not_longitudinal_mixing(self):
         self.assertEqual(report.family_label([.4, .3, .3], True), 'Mixed')
