@@ -30,11 +30,10 @@ LIMITATION = ('Geometric displacement classification only; not cFSM/GBT or strai
     'from panel interiors. Independent rigid motion of built-up pieces is reported as an '
     'Assembly-like component and is excluded from the L/D/G denominator. Anchor motion that '
     'changes panel chord length is reported as Other-like transverse extension and is also '
-    'excluded. Distortional proxy is driven by inextensional translation of fold lines after '
-    'whole-section and piece-rigid motion are removed; local proxy is the remaining within-panel '
-    'deformation. Local plate bending is measured first relative to moving physical wall '
-    'chords from builtup_segments.csv when available; only the remaining fold/coarse motion '
-    'can become D. Older runs without persisted wall geometry use a mesh fallback and are '
+    'excluded. Local plate bending is measured first from normal displacement relative '
+    'to moving physical-wall chords. Distortional proxy is then driven only by the remaining '
+    'inextensional fold/coarse motion. The wall geometry comes from '
+    'builtup_segments.csv when available. Older runs without persisted wall geometry use a mesh fallback and are '
     'flagged accordingly. Inspect the displayed shapes.')
 
 
