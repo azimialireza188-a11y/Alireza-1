@@ -11,7 +11,7 @@ import os
 import numpy as np
 
 COLORS = {'L': '#18a477', 'D': '#e89b32', 'G': '#4489e8', 'Assembly': '#b060c8',
-          'Mixed': '#a36ede', 'Unresolved': '#8492a5'}
+          'Other': '#9b6b43', 'Mixed': '#a36ede', 'Unresolved': '#8492a5'}
 
 
 def common_grid(tracks, tolerance):
@@ -59,10 +59,10 @@ def rigid_shares(vector, projector, qrelative=None):
     return dict(
         whole_section_rigid_percent=100*norms['G']/total,
         relative_piece_rigid_percent=100*norms['A']/total,
-        within_piece_deformation_percent=100*(norms['D']+norms['L'])/total,
+        within_piece_deformation_percent=100*(norms['D']+norms['L']+norms.get('O', 0.))/total,
         local_within_ldg_percent=d['local_percent'],
         distortional_within_ldg_percent=d['distortional_percent'],
-        assembly_percent=d['assembly_percent'],
+        assembly_percent=d['assembly_percent'], other_percent=d.get('other_percent', 0.),
         reconstruction_relative_error=d['reconstruction_relative_error'])
 
 
@@ -111,11 +111,12 @@ def write_critical_stress_wavelength(output_dir, summary):
     ylabel = 'Critical stress (MPa)' if value == 'stress_MPa' else 'Eigenvalue multiplier'
 
     fig, ax = plt.subplots(figsize=(15, 7.5))
-    markers = {'L': 'o', 'D': '^', 'G': 's', 'Assembly': 'D', 'Mixed': 'v', 'Unresolved': 'x'}
+    markers = {'L': 'o', 'D': '^', 'G': 's', 'Assembly': 'D', 'Other': 'P', 'Mixed': 'v', 'Unresolved': 'x'}
     labels = {'L': 'Abaqus modes: Local', 'D': 'Abaqus modes: Distortional',
               'G': 'Abaqus modes: Global', 'Assembly': 'Abaqus modes: Assembly-like',
+              'Other': 'Abaqus modes: Other/extension-like',
               'Mixed': 'Abaqus modes: Mixed', 'Unresolved': 'Abaqus modes: Unresolved'}
-    for family in ('L', 'D', 'G', 'Assembly', 'Mixed', 'Unresolved'):
+    for family in ('L', 'D', 'G', 'Assembly', 'Other', 'Mixed', 'Unresolved'):
         subset = [r for r in rows if r['family'] == family]
         if subset:
             ax.scatter([r['half_wavelength_mm'] for r in subset], [r[value] for r in subset],
@@ -165,7 +166,7 @@ def write_critical_stress_wavelength(output_dir, summary):
     ax.legend(loc='best', fontsize=8)
     fig.text(.06, .015,
              'L/D/G are anchor-driven geometric screening labels unless a validated mechanical basis is supplied. '
-             'Assembly-like motion is not forced into Distortional. This is not a classical CUFSM signature curve.',
+             'Assembly-like and extension-like Other motion are not forced into Distortional. This is not a classical CUFSM signature curve.',
              fontsize=8)
     fig.tight_layout(rect=(0, .035, 1, 1))
     paths = []
@@ -253,7 +254,7 @@ def write_visuals(output_dir, summary, previews, geometry, spectra):
     plt.close(fig)
     # Six actual mode-section views, selected for variation rather than inferred purity.
     chosen = list(dict.fromkeys([0, min(1, len(rows)-1)]+[
-        next((i for i, r in enumerate(rows) if r['family'] == f), 0) for f in ('L', 'D', 'G', 'Assembly', 'Mixed', 'Unresolved')]))
+        next((i for i, r in enumerate(rows) if r['family'] == f), 0) for f in ('L', 'D', 'G', 'Assembly', 'Other', 'Mixed', 'Unresolved')]))
     for i in np.argsort([(r.get('raw_vs_fitted_max_pp') or 0) for r in rows])[::-1]:
         if len(chosen) >= min(6, len(rows)): break
         if int(i) not in chosen: chosen.append(int(i))
