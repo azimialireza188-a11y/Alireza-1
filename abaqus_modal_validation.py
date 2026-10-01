@@ -171,16 +171,43 @@ class ForceProjector:
             condition=float(np.linalg.cond(self.s)))
 
 
-def proxy_cluster(vectors, projector, dominance=.9):
+def proxy_cluster(vectors, projector, dominance=.9, max_assembly_percent=25.):
+    """Bounds for L/D/G plus an explicit built-up assembly-motion gate.
+
+    The projector is linear.  We whiten the observed eigenspace first, apply
+    the anchor-driven split to every orthonormal direction, and compute exact
+    generalized-eigenvalue share bounds.  Assembly motion is not folded into D.
+    """
     from abaqus_dsm_modal_audit import orth
     q = orth(vectors)
     if q.shape[1] != vectors.shape[1]:
         raise ValueError('Observed transverse eigenvectors are rank deficient')
-    y = q.reshape(-1, len(projector.sqrtw), q.shape[1])
-    g = np.einsum('tdk,dp->tpk', y, projector.qglobal)
-    d = np.einsum('tdk,dp->tpk', y, projector.qdist)
-    r = y-np.einsum('tpk,dp->tdk', g, projector.qglobal)-np.einsum('tpk,dp->tdk', d, projector.qdist)
-    return component_bounds([p.reshape(-1, q.shape[1]) for p in (r, d, g)], dominance)
+    component_columns = [[], [], [], []]  # L, D, G, A
+    for j in range(q.shape[1]):
+        parts = projector.audit_components(q[:, j])
+        for k, part in enumerate(parts):
+            component_columns[k].append(np.asarray(part).reshape(-1))
+    parts = [np.column_stack(cols) for cols in component_columns]
+    result = component_bounds(parts[:3], dominance)
+
+    grams = [p.T @ p for p in parts]
+    h = sum(grams)
+    h = .5*(h+h.T)
+    ev = np.linalg.eigvalsh(h)
+    if ev[0] <= 1e-12*ev[-1]:
+        raise ValueError('Rank-deficient observed proxy component space')
+    chol = np.linalg.cholesky(h)
+    left = np.linalg.solve(chol, grams[3])
+    whitened = np.linalg.solve(chol, left.T).T
+    ae = np.clip(np.linalg.eigvalsh(.5*(whitened+whitened.T)), 0., 1.)
+    result['assembly_min_percent'] = float(100*ae[0])
+    result['assembly_max_percent'] = float(100*ae[-1])
+    result['assembly_mean_percent'] = float(100*np.mean(ae))
+    if result['assembly_min_percent'] >= max_assembly_percent:
+        result['stable_family'] = 'Assembly'
+    elif result['assembly_max_percent'] >= max_assembly_percent:
+        result['stable_family'] = 'Mixed'
+    return result
 
 
 def ordered_path(xy, edges):
