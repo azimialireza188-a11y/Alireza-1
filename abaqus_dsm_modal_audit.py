@@ -430,8 +430,9 @@ def process(args):
         grid = visuals.common_grid(geo['tracks'], geo['tolerance'])
         physical_segments=(build.get('source_inputs') or {}).get('section_segments')
         variants = [enhanced.SectionProjector(geo['xy'], geo['edges'], pieces,
-                    [t['weight'] for t in geo['tracks']], corner_angle=angle,
-                    physical_segments=physical_segments) for angle in (10., 25.)]
+                    [t['weight'] for t in geo['tracks']],
+                    physical_segments=physical_segments, wall_angle_deg=angle)
+                    for angle in (2., 5.)]
         qrelative = visuals.relative_piece_basis(proxy, pieces)
         coverage = min(m['coverage'] for m in geo['mesh'])
         proxy_layers = len(grid['z']) if grid is not None else geo['cap']
