@@ -644,7 +644,7 @@ def write_outputs(output_dir, summary):
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, 'modal_audit.json'), 'w', encoding='utf-8') as stream:
         stream.write(serialized)
-    fields = ['mode', 'eigenvalue', 'stress_MPa', 'half_wavelength_mm', 'family',
+    fields = ['mode', 'eigenvalue', 'stress_MPa', 'half_wavelength_mm', 'dominant_halfwaves', 'family',
         'L_percent', 'D_percent', 'G_percent', 'percentage_kind', 'relative_residual',
         'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
         'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
