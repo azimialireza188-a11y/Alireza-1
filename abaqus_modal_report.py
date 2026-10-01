@@ -500,7 +500,7 @@ def load_physical_segments(report_dir):
     return (build.get('source_inputs') or {}).get('section_segments')
 
 
-def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle, family_threshold, max_assembly_percent, max_other_percent):
+def section_diagnostics(base, metadata, rows, spectra, report_dir, wall_angle_deg, family_threshold, max_assembly_percent, max_other_percent):
     from odbAccess import openOdb
     odb_path = os.path.join(report_dir, os.path.basename(metadata['odb']))
     if not os.path.isfile(odb_path):
@@ -540,8 +540,8 @@ def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle,
         edges = sorted(edges)
         physical_segments=load_physical_segments(report_dir)
         fit = SectionProjector(xy, edges, [t['instance'] for t in tracks],
-                               [t['weight'] for t in tracks], corner_angle,
-                               physical_segments=physical_segments)
+                               [t['weight'] for t in tracks],
+                               physical_segments=physical_segments, wall_angle_deg=wall_angle_deg)
         group_tracks = [[track_index[int(index)] for index in group['indices'][0]] for group in groups]
         frames = {}
         for frame in odb.steps[metadata['step']].frames:
@@ -698,7 +698,7 @@ $('details').textContent='Eigenvalue '+fmt(r.eigenvalue)+' | Half-wave '+fmt(r.h
 let xy=D.geometry.xy, u=D.geometry.dominant_harmonic_shapes[i], mins=[0,1].map(k=>Math.min(...xy.map(p=>p[k]))), maxs=[0,1].map(k=>Math.max(...xy.map(p=>p[k]))), span=Math.max(maxs[0]-mins[0],maxs[1]-mins[1],1), center=mins.map((v,k)=>(v+maxs[k])/2), umax=Math.max(...u.map(v=>Math.hypot(...v)),1e-30), gain=span*(+$('amplitude').value/100)/umax;
 let map=p=>[250+(p[0]-center[0])*330/span,225-(p[1]-center[1])*330/span], deformed=xy.map((p,j)=>p.map((v,k)=>v+gain*u[j][k]));$('shape').replaceChildren();
 for(let [a,b] of D.geometry.edges){for(let [points,stroke,dash] of [[xy,'#9ca7b2','4 3'],[deformed,color,'']]){let p=map(points[a]),q=map(points[b]);svg('line',{x1:p[0],y1:p[1],x2:q[0],y2:q[1],stroke:stroke,'stroke-width':2,'stroke-dasharray':dash},$('shape'))}}
-for(let j of D.geometry.diagnostics.anchor_nodes){let p=map(xy[j]);svg('circle',{cx:p[0],cy:p[1],r:2,fill:'#45556a'},$('shape'))}
+for(let j of (D.geometry.diagnostics.fold_nodes||D.geometry.diagnostics.anchor_nodes||[])){let p=map(xy[j]);svg('circle',{cx:p[0],cy:p[1],r:2,fill:'#45556a'},$('shape'))}
 $('spectrum').replaceChildren();let s=D.spectra[i],w=420/s.length;
 svg('line',{x1:50,y1:390,x2:475,y2:390,stroke:'#333'},$('spectrum'));
 s.forEach((v,j)=>{let e=svg('rect',{x:50+j*w,y:390-v*340,width:Math.max(w-.7,.3),height:v*340,fill:color},$('spectrum'));svg('title',{},e,'n='+(j+1)+'; half-wave='+fmt(D.length/(j+1))+' mm; share='+fmt(v*100)+'%');if(j===0||(j+1)%5===0)svg('text',{x:50+(j+.5)*w,y:410,'text-anchor':'middle','font-size':11},$('spectrum'),j+1)});
@@ -722,7 +722,9 @@ def main(argv=None):
     parser.add_argument('modal_report')
     parser.add_argument('--output', help='Output prefix; default: base prefix + _enhanced')
     parser.add_argument('--top-components', type=int, default=3)
-    parser.add_argument('--corner-angle', type=float, default=15.)
+    parser.add_argument('--corner-angle', type=float, default=15., help='Deprecated compatibility option')
+    parser.add_argument('--wall-angle-deg', type=float, default=3.,
+                        help='Maximum direction change used to merge exported collinear segments into one physical wall')
     parser.add_argument('--family-threshold', type=float, default=.9)
     parser.add_argument('--max-assembly-percent', type=float, default=25.,
                         help='Above this self-norm share, report Assembly-like instead of forcing L/D/G')
@@ -730,7 +732,7 @@ def main(argv=None):
                         help='Above this extension-like self-norm share, report Other-like instead of forcing L/D/G')
     parser.add_argument('--near-limit-fraction', type=float, default=.8)
     args = parser.parse_args(argv)
-    if (args.top_components < 1 or not 0 < args.corner_angle < 180 or
+    if (args.top_components < 1 or not 0 < args.corner_angle < 180 or not 0 < args.wall_angle_deg < 45 or
             not .5 < args.family_threshold <= 1 or not 0 < args.near_limit_fraction <= 1 or
             not 0 < args.max_assembly_percent < 100 or not 0 < args.max_other_percent < 100):
         parser.error('Invalid component count, angle, family threshold or assembly threshold')
@@ -739,7 +741,7 @@ def main(argv=None):
     os.makedirs(os.path.dirname(prefix), exist_ok=True)
     base = load_base(os.path.join(SCRIPT_DIR, 'abaqus_modal_wavelengths.py'))
     geometry = section_diagnostics(base, metadata, rows, spectra,
-        os.path.dirname(os.path.abspath(args.modal_report)), args.corner_angle, args.family_threshold,
+        os.path.dirname(os.path.abspath(args.modal_report)), args.wall_angle_deg, args.family_threshold,
         args.max_assembly_percent, args.max_other_percent)
     components = []
     for i, row in enumerate(rows):
