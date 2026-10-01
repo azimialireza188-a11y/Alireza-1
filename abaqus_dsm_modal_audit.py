@@ -628,7 +628,7 @@ def process(args):
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
             'Independent rigid motion of built-up pieces is reported as Assembly and is not counted as Distortional.',
             'Anchor transverse extension is reported as Other and is not counted as Distortional.',
-            'Geometric D is driven by inextensional fold-line/anchor translation; L is within-panel remainder after G/A/O/D.',
+            'Local is measured first as physical-wall bending relative to moving wall chords; D is evaluated only from the remaining inextensional fold/coarse motion.',
             'L/D/G family energy requires compatible full elastic K and all retained DOFs; signed cross terms must not be discarded.',
             'SUPPLIED review/reference evidence is recorded, not independently certified by this program.',
             'No conclusion of family absence or DSM applicability follows from missing candidates.'])
@@ -658,7 +658,7 @@ def write_outputs(output_dir, summary):
         'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
         'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
         'energy_cross_terms_percent', 'spectral_fit_error', 'dominant_spectral_share', 'transverse_share',
-        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'flags',
+        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'wall_curvature_index', 'flags',
         'eigenspace_stable_family', 'eigenspace_L_min', 'eigenspace_L_max', 'eigenspace_D_min',
         'eigenspace_D_max', 'eigenspace_G_min', 'eigenspace_G_max']
     with open(os.path.join(output_dir, 'modal_percentages.csv'), 'w', newline='', encoding='utf-8-sig') as stream:
@@ -671,6 +671,7 @@ def write_outputs(output_dir, summary):
             flat['relative_piece_rigid_percent'] = (row.get('rigid_diagnostics') or {}).get('relative_piece_rigid_percent')
             flat['assembly_percent'] = (row.get('rigid_diagnostics') or {}).get('assembly_percent')
             flat['other_percent'] = (row.get('rigid_diagnostics') or {}).get('other_percent')
+            flat['wall_curvature_index'] = (row.get('rigid_diagnostics') or {}).get('wall_curvature_index')
             if row.get('eigenspace_bounds'):
                 for j, f in enumerate(FAMILIES):
                     for bound in ('min', 'max'):
