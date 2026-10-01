@@ -187,6 +187,31 @@ def read_json(path):
     with open(path, encoding='utf-8-sig') as stream:
         return json.load(stream)
 
+def read_curve_reference(path):
+    """Read optional external half-wavelength/critical-stress curves for plotting only.
+
+    Required CSV columns: label, half_wavelength_mm, critical_stress_MPa.
+    These data never participate in family classification or DSM acceptance.
+    """
+    grouped = {}
+    with open(path, newline='', encoding='utf-8-sig') as stream:
+        reader = csv.DictReader(stream)
+        required = {'label', 'half_wavelength_mm', 'critical_stress_MPa'}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError('Curve reference CSV requires: label, half_wavelength_mm, critical_stress_MPa')
+        for row in reader:
+            label = str(row['label']).strip()
+            try:
+                x = float(row['half_wavelength_mm']); y = float(row['critical_stress_MPa'])
+            except (TypeError, ValueError):
+                raise ValueError('Invalid numeric value in curve reference CSV')
+            if not label or not math.isfinite(x) or not math.isfinite(y) or x <= 0 or y <= 0:
+                raise ValueError('Curve reference values must have a label and positive finite coordinates')
+            grouped.setdefault(label, []).append((x, y))
+    return [dict(label=label, points=[list(p) for p in sorted(points)])
+            for label, points in sorted(grouped.items())]
+
+
 
 def sha_file(path):
     h = hashlib.sha256()
@@ -577,10 +602,12 @@ def process(args):
                     for m in shape_comparison.get('matches', []))
         family_assessment[family] = assess_family(candidates[family], compared, ref, reviewed, signature, setup_ok,
                                                  args.validation_tolerance, shape_match)
+    curve_reference = read_curve_reference(args.curve_reference) if args.curve_reference else []
     summary = dict(schema_version=3, source_odb=odb_path, source_odb_sha256=odb_hash, model_signature=signature,
         modes_processed=len(results), mesh_nodes=mesh_nodes, sigma_ref_MPa=sigma, setup_checks_pass=setup_ok,
         percentage_kind=results[0]['percentage_kind'], basis_definition_id=basis_meta.get('family_definition_id'),
         basis_metadata=basis_meta, proxy_geometry=proxy.metadata, settings=vars(args),
+        curve_reference=curve_reference,
         candidates=candidates, families=family_assessment,
         dsm_inputs_MPa={name: family_assessment[f]['accepted_stress_MPa'] for name, f in
                         (('Fcrl', 'L'), ('Fcrd', 'D'), ('Fcre', 'G'))},
@@ -708,6 +735,7 @@ def parse_arguments(argv=None):
     p.add_argument('--shape-comparison', help='mesh_comparison.json with quantitative matched eigenspaces of both ODBs')
     p.add_argument('--reference', help='JSON with independent family buckling reference values and provenance')
     p.add_argument('--review', help='Completed review_template.json, with documented shape/coverage reviews')
+    p.add_argument('--curve-reference', help='Optional plotting-only CSV: label, half_wavelength_mm, critical_stress_MPa')
     p.add_argument('--dominance', type=float, default=.9)
     p.add_argument('--max-residual', type=float, default=.05)
     p.add_argument('--cluster-tolerance', type=float, default=.001)
@@ -718,6 +746,8 @@ def parse_arguments(argv=None):
                    help='Above this piece-rigid self-norm share, do not force the mode into DSM L/D/G')
     args = p.parse_args(argv)
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
+    if args.curve_reference:
+        args.curve_reference = os.path.abspath(os.path.expanduser(args.curve_reference))
     args.output_dir = os.path.abspath(args.output_dir or os.path.join(args.run_dir, 'modal_dsm_audit'))
     for name in ('dominance', 'max_residual', 'cluster_tolerance', 'validation_tolerance', 'mesh_shape_threshold'):
         value = getattr(args, name)
