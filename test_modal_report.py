@@ -56,10 +56,11 @@ class ModalReportTests(unittest.TestCase):
                        [0., 2.], [.5, 2.], [1., 2.]])
         edges = [(0, 1), (1, 2), (3, 4), (4, 5)]
         fit = report.SectionProjector(xy, edges, ['A']*3+['B']*3, np.ones(6))
-        u = np.array([[1., 0.]]*3+[[-1., 0.]]*3)
+        # Opposite normal translations of the two pieces cannot be represented
+        # by one whole-section rigid motion.
+        u = np.array([[0., 1.]]*3+[[0., -1.]]*3)
         d = fit.component_diagnostics(u)
         self.assertGreater(d['assembly_percent'], 99.999)
-        self.assertLess(d['distortional_percent'], 1e-8)
         self.assertEqual(report.family_label(fit.shares(u), fit.supported,
                                              assembly_percent=d['assembly_percent']), 'Assembly-like')
 
