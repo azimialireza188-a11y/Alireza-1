@@ -327,7 +327,7 @@ def read_mapped_mode(frame, keys):
     return result
 
 
-def proxy_geometry(base, enhanced, odb, metadata):
+def proxy_geometry(base, enhanced, odb, metadata, build):
     axis = 'xyz'.index(metadata['axis'])
     transverse = [j for j in range(3) if j != axis]
     names = [m['instance'] for m in metadata['instances']]
@@ -350,8 +350,10 @@ def proxy_geometry(base, enhanced, odb, metadata):
                     ia, ib = node_to_track[lookup[ka]], node_to_track[lookup[kb]]
                     if ia != ib:
                         edges.add(tuple(sorted((ia, ib))))
+    physical_segments=(build.get('source_inputs') or {}).get('section_segments')
     projector = enhanced.SectionProjector(xy, sorted(edges), [t['instance'] for t in tracks],
-                                           [t['weight'] for t in tracks])
+                                           [t['weight'] for t in tracks],
+                                           physical_segments=physical_segments)
     group_tracks = [[node_to_track[int(i)] for i in group['indices'][0]] for group in groups]
     return dict(axis=axis, transverse=transverse, tracks=tracks, keys=keys, lookup=lookup,
                 tables=base.label_tables(keys), groups=groups, group_tracks=group_tracks,
@@ -416,7 +418,7 @@ def process(args):
     basis_meta, stiffness, mechanical, mapped_keys = {}, None, None, None
     mode_vectors, results, clusters, previews, full_shapes = {}, [], [], [], []
     try:
-        geo = proxy_geometry(base, enhanced, odb, metadata)
+        geo = proxy_geometry(base, enhanced, odb, metadata, build)
         if args.basis:
             mechanical, mapped_keys, stiffness, basis_meta = load_basis(args.basis, odb, odb_hash, signature)
         frames = {base.frame_eigen(f)[0]: f for f in odb.steps[metadata['step']].frames if base.frame_eigen(f)}
@@ -426,8 +428,11 @@ def process(args):
         proxy = geo['projector']
         pieces = [t['instance'] for t in geo['tracks']]
         grid = visuals.common_grid(geo['tracks'], geo['tolerance'])
+        physical_segments=(build.get('source_inputs') or {}).get('section_segments')
         variants = [enhanced.SectionProjector(geo['xy'], geo['edges'], pieces,
-                    [t['weight'] for t in geo['tracks']], corner_angle=angle) for angle in (10., 25.)]
+                    [t['weight'] for t in geo['tracks']],
+                    physical_segments=physical_segments, wall_angle_deg=angle)
+                    for angle in (2., 5.)]
         qrelative = visuals.relative_piece_basis(proxy, pieces)
         coverage = min(m['coverage'] for m in geo['mesh'])
         proxy_layers = len(grid['z']) if grid is not None else geo['cap']
@@ -624,7 +629,7 @@ def process(args):
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
             'Independent rigid motion of built-up pieces is reported as Assembly and is not counted as Distortional.',
             'Anchor transverse extension is reported as Other and is not counted as Distortional.',
-            'Geometric D is driven by inextensional fold-line/anchor translation; L is within-panel remainder after G/A/O/D.',
+            'Local is measured first as physical-wall bending relative to moving wall chords; D is evaluated only from the remaining inextensional fold/coarse motion.',
             'L/D/G family energy requires compatible full elastic K and all retained DOFs; signed cross terms must not be discarded.',
             'SUPPLIED review/reference evidence is recorded, not independently certified by this program.',
             'No conclusion of family absence or DSM applicability follows from missing candidates.'])
@@ -654,7 +659,7 @@ def write_outputs(output_dir, summary):
         'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
         'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
         'energy_cross_terms_percent', 'spectral_fit_error', 'dominant_spectral_share', 'transverse_share',
-        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'flags',
+        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'wall_curvature_index', 'flags',
         'eigenspace_stable_family', 'eigenspace_L_min', 'eigenspace_L_max', 'eigenspace_D_min',
         'eigenspace_D_max', 'eigenspace_G_min', 'eigenspace_G_max']
     with open(os.path.join(output_dir, 'modal_percentages.csv'), 'w', newline='', encoding='utf-8-sig') as stream:
@@ -667,6 +672,7 @@ def write_outputs(output_dir, summary):
             flat['relative_piece_rigid_percent'] = (row.get('rigid_diagnostics') or {}).get('relative_piece_rigid_percent')
             flat['assembly_percent'] = (row.get('rigid_diagnostics') or {}).get('assembly_percent')
             flat['other_percent'] = (row.get('rigid_diagnostics') or {}).get('other_percent')
+            flat['wall_curvature_index'] = (row.get('rigid_diagnostics') or {}).get('wall_curvature_index')
             if row.get('eigenspace_bounds'):
                 for j, f in enumerate(FAMILIES):
                     for bound in ('min', 'max'):

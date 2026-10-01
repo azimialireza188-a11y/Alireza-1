@@ -134,6 +134,25 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     builder.parse_arguments(options)
 
+    def test_input_summary_persists_physical_section_segments(self):
+        pieces = {
+            1: [(0., 0., 10., 0.)],
+            2: [(0., 0., 0., 10.)],
+            3: [(0., 0., -10., 0.)],
+            4: [(0., 0., 0., -10.)],
+        }
+        member = dict(L_mm='3600', gap_mm='10', bolt_row_mm='15')
+        data = (pieces, 3.0, 200000.0, 0.3,
+                [[1., 1., 2., 0., 0., 10., 0.],
+                 [2., 2., 3., 0., 0., 10., 0.],
+                 [3., 3., 4., 0., 0., 10., 0.],
+                 [4., 4., 1., 0., 0., 10., 0.]],
+                [25., 225.], member)
+        with mock.patch.object(builder, 'BUILTUP_DIR', os.path.abspath('source')):
+            summary = builder.input_summary(data)
+        self.assertEqual(sorted(summary['section_segments']), ['P1', 'P2', 'P3', 'P4'])
+        self.assertEqual(summary['section_segments']['P1'][0], [0., 0., 10., 0.])
+
     def test_postprocessing_uses_this_run_and_all_modes(self):
         report = dict(odb=os.path.abspath('new run/model.odb'), reference_stress_MPa=1.0)
         argv = builder.postprocess_arguments(report)
