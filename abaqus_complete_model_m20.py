@@ -405,7 +405,11 @@ def read_model_inputs(folder):
 
 def input_summary(data):
     pieces, thickness, young, poisson, seams, bolts, member = data
+    section_segments = {'P%d' % int(k): [[float(v) for v in seg] for seg in pieces[k]]
+                        for k in sorted(pieces)}
     return dict(source_directory=os.path.abspath(BUILTUP_DIR),
+        section_segments=section_segments,
+        section_geometry_definition='original builtup_segments.csv in global section coordinates',
         length_mm=float(member['L_mm']), thickness_mm=thickness,
         E_MPa=young, nu=poisson, clear_gap_mm=float(member['gap_mm']),
         bolt_row_mm=float(member['bolt_row_mm']), bolts_per_seam=len(bolts),
