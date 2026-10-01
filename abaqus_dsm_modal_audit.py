@@ -187,6 +187,31 @@ def read_json(path):
     with open(path, encoding='utf-8-sig') as stream:
         return json.load(stream)
 
+def read_curve_reference(path):
+    """Read optional external half-wavelength/critical-stress curves for plotting only.
+
+    Required CSV columns: label, half_wavelength_mm, critical_stress_MPa.
+    These data never participate in family classification or DSM acceptance.
+    """
+    grouped = {}
+    with open(path, newline='', encoding='utf-8-sig') as stream:
+        reader = csv.DictReader(stream)
+        required = {'label', 'half_wavelength_mm', 'critical_stress_MPa'}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError('Curve reference CSV requires: label, half_wavelength_mm, critical_stress_MPa')
+        for row in reader:
+            label = str(row['label']).strip()
+            try:
+                x = float(row['half_wavelength_mm']); y = float(row['critical_stress_MPa'])
+            except (TypeError, ValueError):
+                raise ValueError('Invalid numeric value in curve reference CSV')
+            if not label or not math.isfinite(x) or not math.isfinite(y) or x <= 0 or y <= 0:
+                raise ValueError('Curve reference values must have a label and positive finite coordinates')
+            grouped.setdefault(label, []).append((x, y))
+    return [dict(label=label, points=[list(p) for p in sorted(points)])
+            for label, points in sorted(grouped.items())]
+
+
 
 def sha_file(path):
     h = hashlib.sha256()
@@ -335,20 +360,20 @@ def proxy_geometry(base, enhanced, odb, metadata):
 
 
 def proxy_percentages(weighted_coefficients, projector, cap, subspace=False):
-    y = np.asarray(weighted_coefficients)
+    """Rotation-invariant trace shares for the anchor-driven L/D/G split."""
+    y = np.asarray(weighted_coefficients, dtype=float)
     if y.ndim == 1:
         y = y[:, None]
     if subspace:
         y = orth(y)
-    total = float(np.sum(y*y))
-    if total <= 1e-250:
+    if not y.size:
         return [0., 0., 0.]
-    y = y.reshape(cap, len(projector.sqrtw), -1)
-    g = np.einsum('hdk,dp->hpk', y, projector.qglobal)
-    d = np.einsum('hdk,dp->hpk', y, projector.qdist)
-    residual = y-np.einsum('hpk,dp->hdk', g, projector.qglobal)-np.einsum('hpk,dp->hdk', d, projector.qdist)
-    values = np.array([np.sum(residual**2), np.sum(d**2), np.sum(g**2)])
-    return (100*values/values.sum()).tolist()
+    accum = np.zeros(3)
+    for j in range(y.shape[1]):
+        parts = projector.audit_components(y[:, j])
+        for k in range(3):
+            accum[k] += float(np.sum(parts[k]**2))
+    return (100*accum/max(float(accum.sum()), 1e-250)).tolist()
 
 
 def close_clusters(rows, tolerance):
@@ -417,7 +442,7 @@ def process(args):
             raw_vector = None
             if grid is not None:
                 raw_vector = visuals.weighted_raw(u[grid['indices']][:, :, geo['transverse']], grid['weights'], proxy.sqrtw)
-            direct_diagnostics = visuals.rigid_shares(raw_vector, proxy, qrelative) if raw_vector is not None else None
+            direct_diagnostics = None
             sensitivity = None; raw_delta = None; fitted_percentages = None
             if mechanical:
                 vector = read_mapped_mode(frame, mapped_keys)
@@ -443,7 +468,13 @@ def process(args):
                     relative_residual=0. if raw_vector is not None else (row['relative_fit_error'] if row['relative_fit_error'] is not None else 1.),
                     displacement_cross_percent=0., component_norm_sum_over_input=1., condition=None)
                 energy = None
+                direct_diagnostics = visuals.rigid_shares(vector, proxy, qrelative)
             label = classify(projected, args.dominance, args.max_residual)
+            if not mechanical and direct_diagnostics:
+                if direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent:
+                    label = 'Assembly'
+                elif direct_diagnostics.get('other_percent', 0.) >= args.max_other_percent:
+                    label = 'Other'
             flags = []
             if mechanical and projected['condition'] > 1e3:
                 flags.append('ILL_CONDITIONED_COMPONENT_FIT')
@@ -455,6 +486,10 @@ def process(args):
                     label = 'Unresolved'; flags.append('UNSUPPORTED_PROXY_TOPOLOGY')
                 if sensitivity['max_range_pp'] > args.max_sensitivity_pp or len(set(sensitivity['labels'])) > 1:
                     label = 'Unresolved'; flags.append('PANEL_DEFINITION_SENSITIVE')
+                if direct_diagnostics and direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent:
+                    label = 'Assembly'; flags.append('ASSEMBLY_RIGID_MOTION_DOMINANT')
+                elif direct_diagnostics and direct_diagnostics.get('other_percent', 0.) >= args.max_other_percent:
+                    label = 'Other'; flags.append('OTHER_TRANSVERSE_EXTENSION_DOMINANT')
                 if raw_vector is None:
                     flags.append('NONALIGNED_STATIONS_FITTED_METRIC_FALLBACK')
                 if coverage < .99:
@@ -467,7 +502,7 @@ def process(args):
                 flags.append('WAVELENGTH_NEAR_MESH_RESOLUTION_LIMIT')
             mode_vectors[row['mode']] = vector
             result = dict(mode=row['mode'], eigenvalue=eigenvalue, stress_MPa=eigenvalue*sigma if sigma else None,
-                family=label, percentages=projected['percentages'],
+                family=label, percentages=projected['percentages'], dominant_halfwaves=row.get('dominant_halfwaves'),
                 relative_residual=projected['relative_residual'], displacement_cross_percent=projected['displacement_cross_percent'],
                 condition=projected['condition'], half_wavelength_mm=row['half_wavelength_mm'], flags=flags,
                 spectral_fit_error=row['relative_fit_error'], dominant_spectral_share=row['dominant_share'],
@@ -503,8 +538,8 @@ def process(args):
                     residual = projection['residual']*mechanical.sqrtw[:, None]
                     bounds['maximum_relative_residual'] = float(np.sqrt(max(0., np.linalg.eigvalsh(residual.T@residual)[-1])))
                 else:
-                    bounds = validation.proxy_cluster(vectors, proxy, args.dominance)
-                    angle_bounds = [validation.proxy_cluster(vectors, p, args.dominance) for p in variants]
+                    bounds = validation.proxy_cluster(vectors, proxy, args.dominance, args.max_assembly_percent, args.max_other_percent)
+                    angle_bounds = [validation.proxy_cluster(vectors, p, args.dominance, args.max_assembly_percent, args.max_other_percent) for p in variants]
                     angle_sensitive = (len(set(b['stable_family'] for b in angle_bounds+[bounds])) > 1 or
                         any(np.max(np.ptp([b[k] for b in angle_bounds+[bounds]], axis=0)) > args.max_sensitivity_pp
                             for k in ('min_percent', 'max_percent')))
@@ -571,10 +606,12 @@ def process(args):
                     for m in shape_comparison.get('matches', []))
         family_assessment[family] = assess_family(candidates[family], compared, ref, reviewed, signature, setup_ok,
                                                  args.validation_tolerance, shape_match)
+    curve_reference = read_curve_reference(args.curve_reference) if args.curve_reference else []
     summary = dict(schema_version=3, source_odb=odb_path, source_odb_sha256=odb_hash, model_signature=signature,
         modes_processed=len(results), mesh_nodes=mesh_nodes, sigma_ref_MPa=sigma, setup_checks_pass=setup_ok,
         percentage_kind=results[0]['percentage_kind'], basis_definition_id=basis_meta.get('family_definition_id'),
         basis_metadata=basis_meta, proxy_geometry=proxy.metadata, settings=vars(args),
+        curve_reference=curve_reference,
         candidates=candidates, families=family_assessment,
         dsm_inputs_MPa={name: family_assessment[f]['accepted_stress_MPa'] for name, f in
                         (('Fcrl', 'L'), ('Fcrd', 'D'), ('Fcre', 'G'))},
@@ -585,6 +622,9 @@ def process(args):
         limitations=['Not a classical signature curve or an automatic cFSM/GBT basis generator.',
             'Family percentages are metric/basis dependent, not portions of critical load.',
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
+            'Independent rigid motion of built-up pieces is reported as Assembly and is not counted as Distortional.',
+            'Anchor transverse extension is reported as Other and is not counted as Distortional.',
+            'Geometric D is driven by inextensional fold-line/anchor translation; L is within-panel remainder after G/A/O/D.',
             'L/D/G family energy requires compatible full elastic K and all retained DOFs; signed cross terms must not be discarded.',
             'SUPPLIED review/reference evidence is recorded, not independently certified by this program.',
             'No conclusion of family absence or DSM applicability follows from missing candidates.'])
@@ -609,12 +649,12 @@ def write_outputs(output_dir, summary):
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, 'modal_audit.json'), 'w', encoding='utf-8') as stream:
         stream.write(serialized)
-    fields = ['mode', 'eigenvalue', 'stress_MPa', 'half_wavelength_mm', 'family',
+    fields = ['mode', 'eigenvalue', 'stress_MPa', 'half_wavelength_mm', 'dominant_halfwaves', 'family',
         'L_percent', 'D_percent', 'G_percent', 'percentage_kind', 'relative_residual',
         'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
         'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
         'energy_cross_terms_percent', 'spectral_fit_error', 'dominant_spectral_share', 'transverse_share',
-        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'flags',
+        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'flags',
         'eigenspace_stable_family', 'eigenspace_L_min', 'eigenspace_L_max', 'eigenspace_D_min',
         'eigenspace_D_max', 'eigenspace_G_min', 'eigenspace_G_max']
     with open(os.path.join(output_dir, 'modal_percentages.csv'), 'w', newline='', encoding='utf-8-sig') as stream:
@@ -625,6 +665,8 @@ def write_outputs(output_dir, summary):
             flat['flags'] = ';'.join(row['flags'])
             flat['sensitivity_range_pp'] = (row.get('sensitivity') or {}).get('max_range_pp')
             flat['relative_piece_rigid_percent'] = (row.get('rigid_diagnostics') or {}).get('relative_piece_rigid_percent')
+            flat['assembly_percent'] = (row.get('rigid_diagnostics') or {}).get('assembly_percent')
+            flat['other_percent'] = (row.get('rigid_diagnostics') or {}).get('other_percent')
             if row.get('eigenspace_bounds'):
                 for j, f in enumerate(FAMILIES):
                     for bound in ('min', 'max'):
@@ -699,14 +741,21 @@ def parse_arguments(argv=None):
     p.add_argument('--shape-comparison', help='mesh_comparison.json with quantitative matched eigenspaces of both ODBs')
     p.add_argument('--reference', help='JSON with independent family buckling reference values and provenance')
     p.add_argument('--review', help='Completed review_template.json, with documented shape/coverage reviews')
+    p.add_argument('--curve-reference', help='Optional plotting-only CSV: label, half_wavelength_mm, critical_stress_MPa')
     p.add_argument('--dominance', type=float, default=.9)
     p.add_argument('--max-residual', type=float, default=.05)
     p.add_argument('--cluster-tolerance', type=float, default=.001)
     p.add_argument('--validation-tolerance', type=float, default=.05)
     p.add_argument('--mesh-shape-threshold', type=float, default=.95, help='Minimum cos squared principal angle for DSM mesh evidence')
     p.add_argument('--max-sensitivity-pp', type=float, default=10., help='Panel-angle sensitivity limit in percentage points, not a probability')
+    p.add_argument('--max-assembly-percent', type=float, default=25.,
+                   help='Above this piece-rigid self-norm share, do not force the mode into DSM L/D/G')
+    p.add_argument('--max-other-percent', type=float, default=25.,
+                   help='Above this transverse-extension self-norm share, do not force the mode into DSM L/D/G')
     args = p.parse_args(argv)
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
+    if args.curve_reference:
+        args.curve_reference = os.path.abspath(os.path.expanduser(args.curve_reference))
     args.output_dir = os.path.abspath(args.output_dir or os.path.join(args.run_dir, 'modal_dsm_audit'))
     for name in ('dominance', 'max_residual', 'cluster_tolerance', 'validation_tolerance', 'mesh_shape_threshold'):
         value = getattr(args, name)
@@ -716,6 +765,10 @@ def parse_arguments(argv=None):
         p.error('dominance must exceed 0.5 for a unique dominant family')
     if not math.isfinite(args.max_sensitivity_pp) or not 0 < args.max_sensitivity_pp <= 100:
         p.error('--max-sensitivity-pp must be in (0, 100]')
+    if not math.isfinite(args.max_assembly_percent) or not 0 < args.max_assembly_percent < 100:
+        p.error('--max-assembly-percent must be in (0, 100)')
+    if not math.isfinite(args.max_other_percent) or not 0 < args.max_other_percent < 100:
+        p.error('--max-other-percent must be in (0, 100)')
     if os.path.exists(args.output_dir) and (not os.path.isdir(args.output_dir) or os.listdir(args.output_dir)):
         p.error('Output directory must be new or empty; choose --output-dir for another audit')
     return args

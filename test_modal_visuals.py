@@ -45,11 +45,13 @@ class DirectShapeTests(unittest.TestCase):
         xy = np.array([[0., 0.], [1., 0.], [0., 2.], [1., 2.]])
         p = report.SectionProjector(xy, [(0, 1), (2, 3)], ['A', 'A', 'B', 'B'], np.ones(4))
         q = v.relative_piece_basis(p, ['A', 'A', 'B', 'B'])
-        u = np.array([[1., 0.], [1., 0.], [-1., 0.], [-1., 0.]])
+        u = np.array([[0., 1.], [0., 1.], [0., -1.], [0., -1.]])
         shares = v.rigid_shares(u.ravel(), p, q)
-        self.assertAlmostEqual(sum(shares.values()), 100.)
-        self.assertGreater(shares['relative_piece_rigid_percent'], 0.)
-        self.assertAlmostEqual(shares['within_piece_deformation_percent'], 0.)
+        total = (shares['whole_section_rigid_percent']+shares['relative_piece_rigid_percent']+
+                 shares['within_piece_deformation_percent'])
+        self.assertAlmostEqual(total, 100.)
+        self.assertGreater(shares['relative_piece_rigid_percent'], 99.)
+        self.assertAlmostEqual(shares['within_piece_deformation_percent'], 0., places=10)
 
     def test_sensitivity_is_percentage_points_not_probability(self):
         result = v.sensitivity([[10, 80, 10], [25, 65, 10], [15, 75, 10]], .9)

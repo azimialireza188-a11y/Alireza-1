@@ -65,6 +65,28 @@ class ValidationTests(unittest.TestCase):
         xy = np.array([[2., 0.], [0., 0.], [1., 0.]])
         self.assertEqual(v.ordered_path(xy, [(0, 2), (1, 2)]), [1, 2, 0])
 
+    def test_proxy_cluster_keeps_piece_rigid_motion_out_of_distortional(self):
+        import abaqus_modal_report as report
+        xy = np.array([[0., 0.], [.5, 0.], [1., 0.],
+                       [0., 2.], [.5, 2.], [1., 2.]])
+        fit = report.SectionProjector(xy, [(0, 1), (1, 2), (3, 4), (4, 5)],
+                                      ['A']*3+['B']*3, np.ones(6))
+        u = np.array([[0., 1.]]*3+[[0., -1.]]*3).ravel()
+        r = v.proxy_cluster(u[:, None], fit, dominance=.9, max_assembly_percent=25.)
+        self.assertEqual(r['stable_family'], 'Assembly')
+        self.assertGreater(r['assembly_min_percent'], 99.)
+
+    def test_proxy_cluster_keeps_extension_out_of_distortional(self):
+        import abaqus_modal_report as report
+        xy = np.column_stack((np.linspace(0., 10., 9), np.zeros(9)))
+        fit = report.SectionProjector(xy, [(i, i+1) for i in range(8)], ['P']*9, np.ones(9))
+        u = np.column_stack((xy[:, 0]-5., np.zeros(9))).ravel()
+        weighted = u*fit.sqrtw
+        r = v.proxy_cluster(weighted[:, None], fit, dominance=.9,
+                            max_assembly_percent=25., max_other_percent=25.)
+        self.assertEqual(r['stable_family'], 'Other')
+        self.assertGreater(r['other_min_percent'], 99.)
+
     def test_force_split_recovers_analytic_energy_families(self):
         k = np.diag([2., 3., 4., 5.])
         j = np.eye(4)[:, :2]

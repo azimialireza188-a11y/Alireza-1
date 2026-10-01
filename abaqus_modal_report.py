@@ -23,13 +23,18 @@ import numpy as np
 SCRIPT_DIR = os.path.dirname(os.path.abspath(
     globals().get('__file__', sys._getframe().f_code.co_filename)))
 COLORS = {'Global-like': '#2369b0', 'Distortional-like': '#e58a16',
-          'Local-like': '#29946b', 'Mixed': '#8b58a0', 'Unresolved': '#777777'}
+          'Local-like': '#29946b', 'Assembly-like': '#b060c8', 'Other-like': '#9b6b43',
+          'Mixed': '#8b58a0', 'Unresolved': '#777777'}
 LIMITATION = ('Geometric displacement classification only; not cFSM/GBT or strain-energy '
-    'participation. Global = rigid motion of the entire cross-section; distortional proxy = '
-    'coarse section deformation and relative component motion; local proxy = residual '
-    'deformation within detected panels. Membrane stretching can enter the distortional '
-    'proxy. Curved panels weaken the physical interpretation and are flagged; unsupported '
-    'topology or poorly fitted modes remain unresolved. Inspect the displayed shapes.')
+    'participation. Whole-section rigid motion is fitted from fold-line/anchor motion, not '
+    'from panel interiors. Independent rigid motion of built-up pieces is reported as an '
+    'Assembly-like component and is excluded from the L/D/G denominator. Anchor motion that '
+    'changes panel chord length is reported as Other-like transverse extension and is also '
+    'excluded. Distortional proxy is driven by inextensional translation of fold lines after '
+    'whole-section and piece-rigid motion are removed; local proxy is the remaining within-panel '
+    'deformation. Curved panels weaken '
+    'the physical interpretation and are flagged; unsupported topology or poorly fitted '
+    'modes remain unresolved. Inspect the displayed shapes.')
 
 
 def orth(matrix):
@@ -44,42 +49,68 @@ def orth(matrix):
 
 
 class SectionProjector:
-    """Nested, weighted subspaces; contributions sum to one, but are not energies."""
+    """Anchor-driven geometric split for built-up open sections.
+
+    The previous proxy put independent rigid motion of each built-up piece in
+    the distortional space and fitted whole-section rigid motion to every panel
+    node. Both choices can turn local plate buckling into a false D/G label.
+    This implementation uses fold-line/anchor translations as the kinematic
+    evidence for G and D:
+
+      G: whole-section rigid motion fitted only to anchors,
+      A: independent rigid motion of each physical piece after removing G,
+      O: panel chord extension / shear-like anchor motion (non-DSM Other),
+      D: inextensional fold-line motion after removing G, A and O,
+      L: nodal remainder after G + A + O + D.
+
+    A and O are intentionally separate from DSM L/D/G. L/D/G percentages normalize
+    only G, D and L self-norms; assembly/other participation is reported separately.
+    The split is linear, so it can also be applied to a rotated eigenspace.
+    """
+
     def __init__(self, xy, edges, pieces, weights, corner_angle=15.):
         self.xy = np.asarray(xy, dtype=float)
-        count = len(xy)
-        self.sqrtw = np.repeat(np.sqrt(weights), 2)
-        centered = self.xy-np.average(self.xy, axis=0, weights=weights)
+        self.weights = np.asarray(weights, dtype=float)
+        self.pieces = np.asarray(pieces)
+        count = len(self.xy)
+        if self.weights.shape != (count,) or np.any(self.weights <= 0):
+            raise ValueError('Positive section weights required')
+        self.sqrtw = np.repeat(np.sqrt(self.weights), 2)
+        centered = self.xy-np.average(self.xy, axis=0, weights=self.weights)
         rigid = np.zeros((count, 2, 3))
         rigid[:, 0, 0] = 1.
         rigid[:, 1, 1] = 1.
         rigid[:, 0, 2] = -centered[:, 1]
         rigid[:, 1, 2] = centered[:, 0]
-        self.qglobal = orth(rigid.reshape(-1, 3)*self.sqrtw[:, None])
+        rigid_flat = rigid.reshape(-1, 3)
+        self.qglobal = orth(rigid_flat*self.sqrtw[:, None])
+
         adjacency = [set() for _ in range(count)]
-        for a, b in edges:
-            adjacency[a].add(b)
-            adjacency[b].add(a)
+        for aa, bb in edges:
+            adjacency[aa].add(bb)
+            adjacency[bb].add(aa)
         anchors = set()
         for i, neighbors in enumerate(adjacency):
             if len(neighbors) != 2:
                 anchors.add(i)
             else:
-                a, b = list(neighbors)
-                v, w = self.xy[i]-self.xy[a], self.xy[b]-self.xy[i]
+                aa, bb = list(neighbors)
+                v, w = self.xy[i]-self.xy[aa], self.xy[bb]-self.xy[i]
                 angle = math.degrees(math.acos(float(np.clip(np.dot(v, w)/
                     max(np.linalg.norm(v)*np.linalg.norm(w), 1e-30), -1., 1.))))
                 if angle >= corner_angle:
                     anchors.add(i)
         anchors = sorted(anchors)
         anchor_ids = {node: i for i, node in enumerate(anchors)}
+
         shape = np.zeros((count, len(anchors)))
         for node, i in anchor_ids.items():
             shape[node, i] = 1.
         visited, paths = set(), []
         for first in anchors:
             for neighbor in adjacency[first]:
-                if tuple(sorted((first, neighbor))) in visited:
+                edge = tuple(sorted((first, neighbor)))
+                if edge in visited:
                     continue
                 path, previous, current = [first], first, neighbor
                 while True:
@@ -98,50 +129,183 @@ class SectionProjector:
                 t = distance/max(distance[-1], 1e-30)
                 shape[path, anchor_ids[first]] = 1.-t
                 shape[path, anchor_ids[path[-1]]] = t
-        total_length = sum(np.linalg.norm(self.xy[b]-self.xy[a]) for a, b in edges)
+
+        total_length = sum(np.linalg.norm(self.xy[bb]-self.xy[aa]) for aa, bb in edges)
         flat_length = 0.
+        panel_lengths = []
         for path in paths:
             points = self.xy[path]
             chord = points[-1]-points[0]
             length = np.linalg.norm(chord)
+            arc = float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
+            panel_lengths.append(arc)
             if length:
                 deviation = np.abs(np.cross(points-points[0], chord))/length
                 if np.max(deviation) <= .02*length:
-                    flat_length += np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1))
-        coarse = np.kron(shape, np.eye(2))
-        # Independent rigid motions of the pieces must not be called plate-local bending.
-        piece_columns = []
-        pieces = np.asarray(pieces)
-        for name in sorted(set(pieces)):
-            mask = np.repeat(pieces == name, 2)
-            piece_columns.append(rigid.reshape(-1, 3)*mask[:, None])
-        coarse = np.column_stack([coarse]+piece_columns)*self.sqrtw[:, None]
-        coarse -= self.qglobal.dot(self.qglobal.T.dot(coarse))
-        self.qdist = orth(coarse)
+                    flat_length += arc
+
+        ndof = 2*count
+        eye = np.eye(ndof)
+        anchor_rows = np.array([2*i+j for i in anchors for j in (0, 1)], dtype=int)
+
+        def rigid_fit_operator(nodes, output_mask=None):
+            nodes = list(nodes)
+            rows = np.array([2*i+j for i in nodes for j in (0, 1)], dtype=int)
+            if len(rows) < 4:
+                return np.zeros((ndof, ndof)), 0
+            design = rigid_flat[rows]
+            ws = self.sqrtw[rows]
+            weighted = design*ws[:, None]
+            rank = int(np.linalg.matrix_rank(weighted, tol=max(weighted.shape)*np.finfo(float).eps*
+                                             max(np.linalg.norm(weighted, 2), 1.)))
+            if rank < 3:
+                return np.zeros((ndof, ndof)), rank
+            pinv = np.linalg.pinv(weighted, rcond=1e-12)
+            op = np.zeros((ndof, ndof))
+            op[:, rows] = rigid_flat @ pinv @ np.diag(ws)
+            if output_mask is not None:
+                keep = np.repeat(np.asarray(output_mask, dtype=bool), 2)
+                op[~keep, :] = 0.
+            return op, rank
+
+        self.pglobal, global_anchor_rank = rigid_fit_operator(anchors)
+        residual_after_global = eye-self.pglobal
+        piece_total = np.zeros((ndof, ndof))
+        piece_anchor_ranks = {}
+        for name in sorted(set(self.pieces)):
+            nodes = [i for i in anchors if self.pieces[i] == name]
+            mask = self.pieces == name
+            op, rank = rigid_fit_operator(nodes, mask)
+            piece_anchor_ranks[str(name)] = rank
+            piece_total += op
+        self.passembly = piece_total @ residual_after_global
+
+        gather = np.zeros((2*len(anchors), ndof))
+        for k, node in enumerate(anchors):
+            gather[2*k, 2*node] = 1.
+            gather[2*k+1, 2*node+1] = 1.
+        shape_interpolation = np.kron(shape, np.eye(2)) if anchors else np.zeros((ndof, 0))
+        residual_operator = eye-self.pglobal-self.passembly
+
+        # Separate inextensional fold-line motion (D proxy) from transverse
+        # extension/shear-like anchor motion (Other). For every detected panel
+        # path, a first-order inextensional D field satisfies
+        #     (u_b-u_a) dot tangent_ab = 0.
+        # The null-space projection uses the same anchor metric as the section.
+        constraints = []
+        for path in paths:
+            aa, bb = anchor_ids[path[0]], anchor_ids[path[-1]]
+            chord = self.xy[path[-1]]-self.xy[path[0]]
+            length = np.linalg.norm(chord)
+            if length <= 1e-30:
+                continue
+            tangent = chord/length
+            row = np.zeros(2*len(anchors))
+            row[2*aa:2*aa+2] -= tangent
+            row[2*bb:2*bb+2] += tangent
+            constraints.append(row)
+        anchor_weights = np.repeat(np.sqrt(self.weights[anchors]), 2) if anchors else np.empty(0)
+        if constraints:
+            c = np.vstack(constraints)
+            cw = c/anchor_weights[None, :]
+            unused_u, singular, vt = np.linalg.svd(cw, full_matrices=True)
+            rank = int(np.sum(singular > (singular[0]*1e-10 if len(singular) else 0.)))
+            nullw = vt[rank:].T
+            pd_anchor = (nullw @ nullw.T)*anchor_weights[None, :]/anchor_weights[:, None]
+            po_anchor = np.eye(2*len(anchors))-pd_anchor
+        else:
+            rank = 0
+            pd_anchor = np.eye(2*len(anchors))
+            po_anchor = np.zeros((2*len(anchors), 2*len(anchors)))
+
+        anchor_residual = gather @ residual_operator
+        self.pdist = shape_interpolation @ pd_anchor @ anchor_residual
+        self.pother = shape_interpolation @ po_anchor @ anchor_residual
+        self.plocal = eye-self.pglobal-self.passembly-self.pdist-self.pother
+
+        # Compatibility attributes for older diagnostics. qdist is now the
+        # weighted range of the inextensional fold-line operator only.
+        to_weighted = np.diag(self.sqrtw)
+        from_weighted = np.diag(1./self.sqrtw)
+        self.qassembly = orth(to_weighted @ self.passembly @ from_weighted)
+        self.qdist = orth(to_weighted @ self.pdist @ from_weighted)
+        self.qother = orth(to_weighted @ self.pother @ from_weighted)
+
         self.flat_fraction = float(flat_length/max(total_length, 1e-30))
+        piece_ranks_ok = all(rank >= 3 for rank in piece_anchor_ranks.values())
         self.supported = bool(
-            count*2-self.qglobal.shape[1]-self.qdist.shape[1] >= 2 and
-            len(visited) == len(edges) and all(adjacency))
+            len(anchors) >= 2 and global_anchor_rank >= 3 and piece_ranks_ok and
+            len(visited) == len(edges) and all(adjacency) and
+            np.linalg.matrix_rank(self.plocal) >= 2)
         self.metadata = dict(anchor_nodes=anchors, corner_angle_deg=corner_angle,
             flat_panel_length_fraction=self.flat_fraction, geometry_supported=self.supported,
             curved_panel_proxy=self.flat_fraction < .6,
-            global_rank=self.qglobal.shape[1], coarse_deformation_rank=self.qdist.shape[1],
-            residual_rank=count*2-self.qglobal.shape[1]-self.qdist.shape[1])
+            global_anchor_rank=global_anchor_rank, piece_anchor_ranks=piece_anchor_ranks,
+            global_rank=self.qglobal.shape[1], assembly_rank=self.qassembly.shape[1],
+            coarse_deformation_rank=self.qdist.shape[1], other_extension_rank=self.qother.shape[1],
+            panel_extension_constraint_rank=rank,
+            residual_rank=int(np.linalg.matrix_rank(self.plocal)),
+            maximum_panel_arc_length=float(max(panel_lengths) if panel_lengths else 0.),
+            split_definition='anchor-driven G + piece-rigid A + extension-like O + inextensional fold-line D + within-panel L')
+
+    def _weighted_components(self, coefficients):
+        y = np.asarray(coefficients, dtype=float)
+        original_shape = y.shape
+        y = y.reshape(-1, len(self.sqrtw))
+        x = y/self.sqrtw[None, :]
+        def apply(operator):
+            return (x @ operator.T)*self.sqrtw[None, :]
+        parts = dict(G=apply(self.pglobal), A=apply(self.passembly), O=apply(self.pother),
+                     D=apply(self.pdist), L=apply(self.plocal))
+        for key in parts:
+            parts[key] = parts[key].reshape(original_shape)
+        return parts
+
+    def component_diagnostics_weighted(self, weighted_coefficients):
+        parts = self._weighted_components(weighted_coefficients)
+        norms = {k: float(np.sum(v*v)) for k, v in parts.items()}
+        ldg = norms['L']+norms['D']+norms['G']
+        all_self = ldg+norms['A']+norms['O']
+        reconstruction = sum(parts.values())
+        y = np.asarray(weighted_coefficients, dtype=float)
+        return dict(
+            global_percent=100*norms['G']/max(ldg, 1e-250),
+            distortional_percent=100*norms['D']/max(ldg, 1e-250),
+            local_percent=100*norms['L']/max(ldg, 1e-250),
+            assembly_percent=100*norms['A']/max(all_self, 1e-250),
+            other_percent=100*norms['O']/max(all_self, 1e-250),
+            reconstruction_relative_error=float(np.linalg.norm(y-reconstruction)/max(np.linalg.norm(y), 1e-250)),
+            component_norm_sum_over_input=float(all_self/max(float(np.sum(y*y)), 1e-250)))
+
+    def component_diagnostics(self, coefficients):
+        # Historical SectionProjector API receives unweighted section values.
+        x = np.asarray(coefficients, dtype=float)
+        weighted = (x.reshape(-1, len(self.sqrtw))*self.sqrtw[None, :]).reshape(x.shape)
+        return self.component_diagnostics_weighted(weighted)
 
     def shares(self, coefficients):
-        y = np.asarray(coefficients).reshape(len(coefficients), -1)*self.sqrtw
-        total = float(np.sum(y*y))
-        if total <= 1e-300:
-            return [0., 0., 0.]
-        g = y.dot(self.qglobal)
-        d = y.dot(self.qdist)
-        remainder = y-g.dot(self.qglobal.T)-d.dot(self.qdist.T)
-        values = np.array([np.sum(g*g), np.sum(d*d), np.sum(remainder*remainder)])
-        return (values/values.sum()).tolist()
+        d = self.component_diagnostics(coefficients)
+        return [d['global_percent']/100., d['distortional_percent']/100., d['local_percent']/100.]
+
+    def audit_shares(self, weighted_coefficients):
+        d = self.component_diagnostics_weighted(weighted_coefficients)
+        return [d['local_percent'], d['distortional_percent'], d['global_percent']]
+
+    def audit_components(self, weighted_coefficients):
+        p = self._weighted_components(weighted_coefficients)
+        return [p['L'], p['D'], p['G'], p['A'], p['O']]
 
 
-def family_label(shares, supported, threshold=.65, poor_fit=False):
-    if sum(shares) <= 0 or poor_fit:
+def family_label(shares, supported, threshold=.9, poor_fit=False,
+                 assembly_percent=0., max_assembly_percent=25.,
+                 other_percent=0., max_other_percent=25.):
+    if poor_fit:
+        return 'Unresolved'
+    if assembly_percent >= max_assembly_percent:
+        return 'Assembly-like'
+    if other_percent >= max_other_percent:
+        return 'Other-like'
+    if sum(shares) <= 0:
         return 'Unresolved'
     if shares[0] >= threshold:
         return 'Global-like'
@@ -152,7 +316,6 @@ def family_label(shares, supported, threshold=.65, poor_fit=False):
     if shares[2] >= threshold:
         return 'Local-like'
     return 'Mixed'
-
 
 def sample_envelope(rows, length, value_key):
     grouped = {}
@@ -230,7 +393,7 @@ def load_results(report_path):
     return metadata, rows, spectra, prefix
 
 
-def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle, family_threshold):
+def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle, family_threshold, max_assembly_percent, max_other_percent):
     from odbAccess import openOdb
     odb_path = os.path.join(report_dir, os.path.basename(metadata['odb']))
     if not os.path.isfile(odb_path):
@@ -294,13 +457,17 @@ def section_diagnostics(base, metadata, rows, spectra, report_dir, corner_angle,
             if power.sum() > 1e-300 and not np.allclose(power/power.sum(), spectra[i], atol=1e-6, rtol=1e-5):
                 raise ValueError('ODB mode shape differs from original spectrum at mode %d' % row['mode'])
             shares = fit.shares(coefficients)
+            split = fit.component_diagnostics(coefficients)
             bad = (row['relative_fit_error'] is None or
                    row['relative_fit_error'] > metadata['settings']['max_relative_error'] or
                    row['end_displacement_ratio'] > .05 or
                    row['transverse_displacement_share'] < 1e-8)
             row.update(global_proxy_share=shares[0], distortional_proxy_share=shares[1],
-                       local_proxy_share=shares[2],
-                       family=family_label(shares, fit.supported, family_threshold, bad),
+                       local_proxy_share=shares[2], assembly_proxy_share=split['assembly_percent']/100.,
+                       other_proxy_share=split['other_percent']/100.,
+                       family=family_label(shares, fit.supported, family_threshold, bad,
+                                           split['assembly_percent'], max_assembly_percent,
+                                           split['other_percent'], max_other_percent),
                        classification_basis='heuristic_transverse_displacement',
                        geometry_proxy_supported=fit.supported)
             n = row['dominant_halfwaves']
@@ -417,7 +584,7 @@ function fmt(x,n=2){return x===null?'--':Number(x).toFixed(n)}
 D.rows.forEach((r,i)=>{let o=new Option('Mode '+r.mode+' | '+r.family,i);$('mode').add(o)});
 Object.keys(D.colors).forEach(f=>$('family').add(new Option(f,f)));
 function render(){let i=+$('mode').value,r=D.rows[i], color=D.colors[r.family], shares=[r.global_proxy_share,r.distortional_proxy_share,r.local_proxy_share];
-$('details').textContent='Eigenvalue '+fmt(r.eigenvalue)+' | Half-wave '+fmt(r.half_wavelength_mm)+' mm | '+r.family+' | G/D/L proxies '+shares.map(v=>fmt(100*v,1)+'%').join(' / ')+' | Flags: '+r.enhanced_flags;
+$('details').textContent='Eigenvalue '+fmt(r.eigenvalue)+' | Half-wave '+fmt(r.half_wavelength_mm)+' mm | '+r.family+' | G/D/L proxies '+shares.map(v=>fmt(100*v,1)+'%').join(' / ')+' | Assembly '+fmt(100*(r.assembly_proxy_share||0),1)+'% | Other '+fmt(100*(r.other_proxy_share||0),1)+'% | Flags: '+r.enhanced_flags;
 let xy=D.geometry.xy, u=D.geometry.dominant_harmonic_shapes[i], mins=[0,1].map(k=>Math.min(...xy.map(p=>p[k]))), maxs=[0,1].map(k=>Math.max(...xy.map(p=>p[k]))), span=Math.max(maxs[0]-mins[0],maxs[1]-mins[1],1), center=mins.map((v,k)=>(v+maxs[k])/2), umax=Math.max(...u.map(v=>Math.hypot(...v)),1e-30), gain=span*(+$('amplitude').value/100)/umax;
 let map=p=>[250+(p[0]-center[0])*330/span,225-(p[1]-center[1])*330/span], deformed=xy.map((p,j)=>p.map((v,k)=>v+gain*u[j][k]));$('shape').replaceChildren();
 for(let [a,b] of D.geometry.edges){for(let [points,stroke,dash] of [[xy,'#9ca7b2','4 3'],[deformed,color,'']]){let p=map(points[a]),q=map(points[b]);svg('line',{x1:p[0],y1:p[1],x2:q[0],y2:q[1],stroke:stroke,'stroke-width':2,'stroke-dasharray':dash},$('shape'))}}
@@ -446,17 +613,24 @@ def main(argv=None):
     parser.add_argument('--output', help='Output prefix; default: base prefix + _enhanced')
     parser.add_argument('--top-components', type=int, default=3)
     parser.add_argument('--corner-angle', type=float, default=15.)
-    parser.add_argument('--family-threshold', type=float, default=.65)
+    parser.add_argument('--family-threshold', type=float, default=.9)
+    parser.add_argument('--max-assembly-percent', type=float, default=25.,
+                        help='Above this self-norm share, report Assembly-like instead of forcing L/D/G')
+    parser.add_argument('--max-other-percent', type=float, default=25.,
+                        help='Above this extension-like self-norm share, report Other-like instead of forcing L/D/G')
     parser.add_argument('--near-limit-fraction', type=float, default=.8)
     args = parser.parse_args(argv)
-    if args.top_components < 1 or not 0 < args.corner_angle < 180 or not .5 < args.family_threshold <= 1 or not 0 < args.near_limit_fraction <= 1:
-        parser.error('Invalid component count, angle or threshold')
+    if (args.top_components < 1 or not 0 < args.corner_angle < 180 or
+            not .5 < args.family_threshold <= 1 or not 0 < args.near_limit_fraction <= 1 or
+            not 0 < args.max_assembly_percent < 100 or not 0 < args.max_other_percent < 100):
+        parser.error('Invalid component count, angle, family threshold or assembly threshold')
     metadata, rows, spectra, base_prefix = load_results(args.modal_report)
     prefix = os.path.abspath(args.output or base_prefix+'_enhanced')
     os.makedirs(os.path.dirname(prefix), exist_ok=True)
     base = load_base(os.path.join(SCRIPT_DIR, 'abaqus_modal_wavelengths.py'))
     geometry = section_diagnostics(base, metadata, rows, spectra,
-        os.path.dirname(os.path.abspath(args.modal_report)), args.corner_angle, args.family_threshold)
+        os.path.dirname(os.path.abspath(args.modal_report)), args.corner_angle, args.family_threshold,
+        args.max_assembly_percent, args.max_other_percent)
     components = []
     for i, row in enumerate(rows):
         order = np.argsort(-spectra[i], kind='stable')[:args.top_components]
@@ -469,8 +643,8 @@ def main(argv=None):
         flags = [] if row['status'] == 'dominant' else row['status'].split(';')
         if row['near_resolution_limit']:
             flags.append('near_resolution_limit')
-        if row['family'] == 'Unresolved':
-            flags.append('section_family_unresolved')
+        if row['family'] in ('Unresolved', 'Assembly-like', 'Other-like'):
+            flags.append('section_family_'+row['family'].lower().replace('-', '_'))
         if geometry['diagnostics']['curved_panel_proxy']:
             flags.append('curved_panel_proxy')
         row['enhanced_flags'] = ';'.join(flags) if flags else 'none'
