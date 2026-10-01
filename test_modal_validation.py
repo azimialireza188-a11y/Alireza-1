@@ -71,7 +71,7 @@ class ValidationTests(unittest.TestCase):
                        [0., 2.], [.5, 2.], [1., 2.]])
         fit = report.SectionProjector(xy, [(0, 1), (1, 2), (3, 4), (4, 5)],
                                       ['A']*3+['B']*3, np.ones(6))
-        u = np.array([[1., 0.]]*3+[[-1., 0.]]*3).ravel()
+        u = np.array([[0., 1.]]*3+[[0., -1.]]*3).ravel()
         r = v.proxy_cluster(u[:, None], fit, dominance=.9, max_assembly_percent=25.)
         self.assertEqual(r['stable_family'], 'Assembly')
         self.assertGreater(r['assembly_min_percent'], 99.)
