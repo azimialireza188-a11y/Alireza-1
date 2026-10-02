@@ -394,12 +394,15 @@ Expected: PASS.
 - [ ] **Step 1: Write failing classification tests**
 
 Cover:
-- pure synthetic L, D, G vectors return the correct family;
+- pure synthetic L, D, G vectors return the correct family at the 90% dominance threshold;
+- a known mixture below 90% dominance returns `MIXED`;
 - a known mixture returns exact K0-energy shares;
-- K0-energy is primary when vector shares differ;
-- excessive residual produces `UNRESOLVED`;
-- high Assembly sets `HIGH_ASSEMBLY` but does not delete/renormalize the original mode before L/D/G;
-- rotated/scaled repeated-mode eigenspaces give identical family bounds;
+- K0-energy is primary when vector shares differ, while a >10 percentage-point discrepancy sets `METRIC_SENSITIVE`;
+- mechanical residual >5% produces `UNRESOLVED`;
+- harmonic reconstruction residual >5% produces `HARMONIC_FIT_POOR` and `UNRESOLVED`;
+- Assembly >15% sets `HIGH_ASSEMBLY`; Assembly >25% additionally produces `UNRESOLVED`, without deleting/renormalizing the original mode before L/D/G;
+- seam/inter-piece diagnostics set their flags without automatically reassigning the L/D/G family;
+- rotated/scaled repeated-mode eigenspaces give identical family bounds and a non-isolated cluster cannot be certified;
 - serial and all-CPU parallel outputs are bitwise or tight-tolerance equivalent;
 - mocked GPU backend matches CPU reference before being accepted.
 
