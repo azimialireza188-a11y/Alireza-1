@@ -215,8 +215,56 @@ def _cluster_rows(summary):
     return rows
 
 
+def pipeline_report_tables(report):
+    report=report or {}
+    invocation=report.get('invocation') or {}
+    run_row=dict(
+        format=report.get('format'),
+        status=report.get('status'),
+        started_at=report.get('started_at'),
+        updated_at=report.get('updated_at'),
+        total_elapsed_seconds=_finite(report.get('total_elapsed_seconds')),
+        normalized_command=invocation.get('normalized_command'),
+        effective_args_json=_json(invocation.get('effective_args') or []),
+        process_argv_json=_json(invocation.get('process_argv') or []),
+        launch_cwd=invocation.get('launch_cwd'),
+        script_path=invocation.get('script_path'),
+        script_sha256=invocation.get('script_sha256'),
+        git_commit=invocation.get('git_commit'),
+        host=invocation.get('host'),
+        platform=invocation.get('platform'),
+        machine=invocation.get('machine'),
+        processor=invocation.get('processor'),
+        python_version=invocation.get('python_version'),
+        python_executable=invocation.get('python_executable'),
+        process_id=invocation.get('process_id'),
+        submitted=report.get('submitted'),
+        solver_status=report.get('solver_status'),
+        solver_api_status=report.get('solver_api_status'),
+        completion_evidence=report.get('completion_evidence'),
+        resource_plan_json=_json(report.get('resource_plan') or {}),
+        effective_settings_json=_json(report.get('effective_settings') or {}))
+    stage_rows=[]
+    for row in report.get('stages',[]) or []:
+        stage_rows.append(dict(
+            scope=row.get('scope'),parent_stage=row.get('parent_stage'),
+            stage=row.get('stage'),status=row.get('status'),
+            weight_percent=_finite(row.get('weight_percent')),
+            duration_seconds=_finite(row.get('duration_seconds')),
+            started_at=row.get('started_at'),finished_at=row.get('finished_at')))
+    output_rows=[]
+    for path,item in sorted((report.get('outputs') or {}).items()):
+        output_rows.append(dict(
+            path=str(path),bytes=int((item or {}).get('bytes',0)),
+            modified_at=(item or {}).get('modified_at')))
+    return dict(
+        pipeline_run=_table([run_row]),
+        pipeline_stages=_table(stage_rows),
+        pipeline_outputs=_table(output_rows))
+
+
 def analysis_tables(summary,reference,mapped_modes,harmonics,
-                    harmonic_section_min_share=.001):
+                    harmonic_section_min_share=.001,pipeline_report=None):
     if len(mapped_modes)!=len(harmonics):
         raise ValueError('mapped_modes and harmonics must have equal length')
     mode_numbers=[int(x.get('mode')) for x in mapped_modes]
@@ -240,7 +288,7 @@ def analysis_tables(summary,reference,mapped_modes,harmonics,
         plate_definition=reference.get('plate_definition'),
         plate_definition_version=reference.get('plate_definition_version'))
     _flatten('',selected,provenance)
-    return dict(
+    tables=dict(
         modal_summary=_table(_mode_summary_rows(summary)),
         harmonic_summary=_table(_harmonic_rows(mapped_modes,harmonics)),
         peak_sections=_table(_peak_rows(reference,mapped_modes)),
@@ -248,6 +296,9 @@ def analysis_tables(summary,reference,mapped_modes,harmonics,
             reference,mapped_modes,harmonics,harmonic_section_min_share)),
         clusters=_table(_cluster_rows(summary)),
         provenance=_table(provenance))
+    if pipeline_report is not None:
+        tables.update(pipeline_report_tables(pipeline_report))
+    return tables
 
 
 def _sha256(path):
@@ -345,8 +396,15 @@ def export_run(run_dir,audit_dir=None,output_root=None,
             h=decompose_mode(item['z'],item['U'],item['UR'],
                              reference['length_mm'],max_harmonic,bc='S-S')
             mapped.append(item); harmonics.append(h)
-    tables=analysis_tables(summary,reference,mapped,harmonics,
-                           harmonic_section_min_share=harmonic_section_min_share)
+    pipeline_report=None
+    pipeline_path=os.path.join(run_dir,'pipeline_run_report.json')
+    if os.path.isfile(pipeline_path):
+        with open(pipeline_path,encoding='utf-8') as stream:
+            pipeline_report=json.load(stream)
+    tables=analysis_tables(
+        summary,reference,mapped,harmonics,
+        harmonic_section_min_share=harmonic_section_min_share,
+        pipeline_report=pipeline_report)
     return write_bundle(tables,output_root)
 
 
