@@ -16,7 +16,7 @@ import math
 import os
 import numpy as np
 
-from fcfsm_reference_basis import force_family_basis
+from fcfsm_reference_basis import force_family_basis, build_fcfsm_basis
 
 
 _REQUIRED_REFERENCE_PATHS=(
