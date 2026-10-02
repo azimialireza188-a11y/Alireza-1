@@ -342,41 +342,58 @@ def xykey(point):
     return (round(point[0], 6), round(point[1], 6))
 
 
-def select_longitudinal_lines(segments, legacy_keep, count, min_spacing_mm=0.0):
-    """Keep source vertices, with nested refinement weighted by turning angle.
+def mandatory_longitudinal_keep(segments, bolt_points=(), sharp_angle_deg=MERGE_ANGLE_DEG):
+    """Return section lines that the spacing filter is never allowed to remove.
 
-    A curved region is a consecutive run of nonzero turns of the same sign;
-    flats and inflections separate regions. Its end boundaries and all legacy
-    boundaries are mandatory. Interior mandatory lines count towards the budget
-    but are never removed, even when they already exceed it. A single sharp
-    corner remains a boundary. 100 includes every source subdivision exactly as
-    before.
-
-    For counts 2..99, min_spacing_mm applies only to OPTIONAL added boundaries.
-    Distance is measured as arclength along the original section chain, because
-    that is the actual strip width created between neighboring longitudinal
-    partitions. Mandatory/bolt boundaries are preserved even when they violate
-    the requested spacing. A positive spacing can therefore make the achieved
-    optional-line count smaller than the requested budget.
+    The two chain ends, exact bolt-row partitions and genuine sharp source
+    corners are hard constraints. Smooth/low-turn lines learned from virtual
+    topology remain useful candidates, but a positive spacing request may
+    suppress them if they would create an excessively narrow strip.
     """
-    keep = set(legacy_keep)
+    points = [segments[0][:2]] + [seg[2:] for seg in segments]
+    keep = {xykey(points[0]), xykey(points[-1])}
+    keep.update(xykey(point) for point in bolt_points)
+    threshold = math.radians(float(sharp_angle_deg))
+    for i in range(1, len(points)-1):
+        ux, uy = points[i][0]-points[i-1][0], points[i][1]-points[i-1][1]
+        vx, vy = points[i+1][0]-points[i][0], points[i+1][1]-points[i][1]
+        turn = math.atan2(ux*vy-uy*vx, ux*vx+uy*vy)
+        if abs(turn) >= threshold:
+            keep.add(xykey(points[i]))
+    return keep
+
+
+def select_longitudinal_lines(segments, legacy_keep, count, min_spacing_mm=0.0,
+                              mandatory_keep=None):
+    """Keep source vertices, prioritizing curvature while enforcing strip width.
+
+    With min_spacing_mm == 0 this is exactly the historical selector.
+    With a positive spacing, the filter applies to every retained SOFT section
+    line: both optional refinement lines and low-turn lines inherited from the
+    virtual-topology prepass. Only mandatory_keep may violate the spacing; in
+    the model builder those are chain ends, exact bolt lines and genuine sharp
+    corners.
+
+    Distance is section arclength, not Euclidean chord distance. This is the
+    relevant width of the strip created between neighboring longitudinal
+    partitions. Count 100 deliberately keeps every source line unchanged.
+    """
+    legacy_keep = set(legacy_keep)
     if count == 0:
-        return keep
+        return legacy_keep
     if not math.isfinite(min_spacing_mm) or min_spacing_mm < 0:
         raise ValueError('min_spacing_mm must be finite and nonnegative')
-    points = [segments[0][:2]] + [s[2:] for s in segments]
-    keys = [xykey(p) for p in points]
-    # Preserve the established meaning of 100: every input section line.
-    if count == 100:
-        return keep | set(keys)
 
-    # Section arclength positions are used only for the optional-spacing gate.
+    points = [segments[0][:2]] + [seg[2:] for seg in segments]
+    keys = [xykey(point) for point in points]
+    if count == 100:
+        return legacy_keep | set(keys)
+
     arclength = [0.0]
     for a, b in zip(points, points[1:]):
         arclength.append(arclength[-1] + math.hypot(b[0]-a[0], b[1]-a[1]))
 
     def chain_position(point):
-        """Map an exact/mandatory section point to its arclength when possible."""
         px, py = point
         best_error = float('inf')
         best_position = None
@@ -395,14 +412,12 @@ def select_longitudinal_lines(segments, legacy_keep, count, min_spacing_mm=0.0):
         tolerance = max(1e-5, 1e-8*max(arclength[-1], 1.0))
         return best_position if best_error <= tolerance else None
 
-    keep.update((keys[0], keys[-1]))
     turns = [0.0] * len(points)
     regions = []
     for i in range(1, len(points)-1):
         ux, uy = points[i][0]-points[i-1][0], points[i][1]-points[i-1][1]
         vx, vy = points[i+1][0]-points[i][0], points[i+1][1]-points[i][1]
         turns[i] = math.atan2(ux*vy-uy*vx, ux*vx+uy*vy)
-        # Ignore round-off in exported collinear coordinates (0.001 degrees).
         if abs(turns[i]) <= math.radians(0.001):
             continue
         if (not regions or regions[-1][-1] != i-1 or
@@ -411,6 +426,7 @@ def select_longitudinal_lines(segments, legacy_keep, count, min_spacing_mm=0.0):
         regions[-1].append(i)
 
     adjusted_regions = []
+    region_end_keys = set()
     for region in regions:
         region = list(region)
         if region[0] == 1:
@@ -418,46 +434,99 @@ def select_longitudinal_lines(segments, legacy_keep, count, min_spacing_mm=0.0):
         if region[-1] == len(points)-2:
             region = region + [len(points)-1]
         adjusted_regions.append(region)
-        keep.update((keys[region[0]], keys[region[-1]]))
+        region_end_keys.update((keys[region[0]], keys[region[-1]]))
 
+    # Exact backward compatibility when the new spacing option is disabled.
+    if min_spacing_mm <= 0:
+        keep = set(legacy_keep)
+        keep.update((keys[0], keys[-1]))
+        keep.update(region_end_keys)
+        for region in adjusted_regions:
+            first, last = region[0], region[-1]
+            interior = region[1:-1]
+            selected = [i for i in interior if keys[i] in keep]
+            position = {first: 0.0}
+            for i in region[1:]:
+                position[i] = position[i-1] + (abs(turns[i-1])+abs(turns[i]))/2.0
+            candidates = [i for i in interior if keys[i] not in keep]
+            while candidates and len(selected) < count:
+                anchors = [first, last] + selected
+                chosen = max(candidates, key=lambda i: (
+                    min(abs(position[i]-position[j]) for j in anchors), -i))
+                keep.add(keys[chosen])
+                selected.append(chosen)
+                candidates.remove(chosen)
+        return keep
+
+    # If a caller does not distinguish hard/soft lines, preserve the older API
+    # conservatively by treating the supplied legacy set as mandatory.
+    hard = set(legacy_keep if mandatory_keep is None else mandatory_keep)
+    hard.update((keys[0], keys[-1]))
+    keep = set(hard)
+
+    key_index = {key: i for i, key in enumerate(keys)}
     spacing_positions = []
-    if min_spacing_mm > 0:
-        for point in keep:
-            position = chain_position(point)
-            if position is not None:
-                spacing_positions.append(position)
+    unmapped_hard = []
+    for point in hard:
+        position = chain_position(point)
+        if position is None:
+            unmapped_hard.append(point)
+        else:
+            spacing_positions.append(position)
+    keep.update(unmapped_hard)
 
-    def spacing_ok(index):
-        if min_spacing_mm <= 0:
+    tolerance = 1e-9*max(arclength[-1], 1.0)
+
+    def point_spacing_ok(point):
+        position = chain_position(point)
+        if position is None:
             return True
-        position = arclength[index]
-        tolerance = 1e-9*max(arclength[-1], 1.0)
-        return all(abs(position-other) + tolerance >= min_spacing_mm
+        return all(abs(position-other)+tolerance >= min_spacing_mm
                    for other in spacing_positions)
+
+    def accept_point(point):
+        keep.add(point)
+        position = chain_position(point)
+        if position is not None:
+            spacing_positions.append(position)
+
+    # Reconsider low-turn lines inherited from virtual topology and region
+    # endpoints. Keep the most curvature-sensitive line when several compete
+    # for the same < min_spacing_mm neighborhood.
+    soft_seed = (legacy_keep | region_end_keys) - hard
+    ranked = []
+    for point in soft_seed:
+        index = key_index.get(point)
+        importance = abs(turns[index]) if index is not None else 0.0
+        position = chain_position(point)
+        ranked.append((-importance, position if position is not None else float('inf'), point))
+    for unused_importance, unused_position, point in sorted(ranked):
+        if point_spacing_ok(point):
+            accept_point(point)
+
+    def spacing_ok_index(index):
+        return point_spacing_ok(keys[index])
 
     for region in adjusted_regions:
         first, last = region[0], region[-1]
         interior = region[1:-1]
         selected = [i for i in interior if keys[i] in keep]
-        # Cumulative turning, rather than distance, keeps the existing
-        # sensitivity-focused placement. Spacing only filters candidates.
         position = {first: 0.0}
         for i in region[1:]:
             position[i] = position[i-1] + (abs(turns[i-1])+abs(turns[i]))/2.0
         candidates = [i for i in interior if keys[i] not in keep]
         while candidates and len(selected) < count:
-            eligible = [i for i in candidates if spacing_ok(i)]
+            eligible = [i for i in candidates if spacing_ok_index(i)]
             if not eligible:
                 break
             anchors = [first, last] + selected
             chosen = max(eligible, key=lambda i: (
                 min(abs(position[i]-position[j]) for j in anchors), -i))
-            keep.add(keys[chosen])
+            accept_point(keys[chosen])
             selected.append(chosen)
-            if min_spacing_mm > 0:
-                spacing_positions.append(arclength[chosen])
             candidates.remove(chosen)
     return keep
+
 
 def read_geometry(folder):
     """Read original section coordinates without loading the analysis script."""
@@ -648,8 +717,11 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         part.PartitionFaceByDatumPlane(datumPlane=part.datums[plane.id], faces=face)
         keep.add(xykey((x, y)))
 
-    keep = select_longitudinal_lines(pieces[1], keep, LONGITUDINAL_LINES,
-                                     LONGITUDINAL_LINE_MIN_SPACING_MM)
+    mandatory_keep = mandatory_longitudinal_keep(
+        pieces[1], bolt_points=bolt_xy, sharp_angle_deg=MERGE_ANGLE_DEG)
+    keep = select_longitudinal_lines(
+        pieces[1], keep, LONGITUDINAL_LINES,
+        LONGITUDINAL_LINE_MIN_SPACING_MM, mandatory_keep=mandatory_keep)
     if LONGITUDINAL_LINES == 100:
         # Extrusion merges collinear sketch segments into a single face, but
         # can leave their end vertices. Restore the missing lengthwise cuts
@@ -791,6 +863,7 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     report = dict(length_mm=LENGTH_MM, target_mesh_mm=MESH_MM, modes=N_MODES,
         longitudinal_lines=LONGITUDINAL_LINES,
         longitudinal_line_min_spacing_mm=LONGITUDINAL_LINE_MIN_SPACING_MM,
+        mandatory_longitudinal_lines=len(mandatory_keep),
         retained_section_lines=len(keep),
         vectors=N_VECTORS, max_iterations=MAX_ITERATIONS, cpus=cpus,
         job_name=MODEL_NAME, odb=os.path.abspath(MODEL_NAME+'.odb'),

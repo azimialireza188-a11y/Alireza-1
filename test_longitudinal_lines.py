@@ -70,6 +70,41 @@ class LongitudinalLinesTests(unittest.TestCase):
         high = {builder.xykey(p) for p in points[17:-2]}
         self.assertGreater(len(selected & high), len(selected & low))
 
+    def test_soft_legacy_lines_are_also_filtered_by_spacing_in_builder_mode(self):
+        radius = 20.0
+        points = [(radius*math.cos(i*math.pi/80.), radius*math.sin(i*math.pi/80.))
+                  for i in range(41)]
+        segments = [a+b for a, b in zip(points, points[1:])]
+        # Mimic low-turn lines inherited from the virtual-topology prepass.
+        legacy = {builder.xykey(points[0]), builder.xykey(points[-1]),
+                  builder.xykey(points[10]), builder.xykey(points[11])}
+        mandatory = builder.mandatory_longitudinal_keep(segments)
+        selected = builder.select_longitudinal_lines(
+            segments, legacy, 8, 5.0, mandatory_keep=mandatory)
+        self.assertFalse({builder.xykey(points[10]), builder.xykey(points[11])} <= selected)
+        ds = [math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:])]
+        arc = [0.0]
+        for value in ds:
+            arc.append(arc[-1]+value)
+        ids = [i for i,p in enumerate(points) if builder.xykey(p) in selected]
+        for a, b in zip(ids, ids[1:]):
+            self.assertGreaterEqual(arc[b]-arc[a]+1e-9, 5.0)
+
+    def test_sharp_corner_and_bolt_lines_remain_mandatory(self):
+        points = [(0.,0.), (10.,0.), (12.,0.), (12.,10.), (12.,20.)]
+        segments = [a+b for a,b in zip(points, points[1:])]
+        bolt = (6.,0.)
+        mandatory = builder.mandatory_longitudinal_keep(
+            segments, bolt_points=[bolt], sharp_angle_deg=10.)
+        self.assertIn(builder.xykey(points[2]), mandatory)  # 90-degree corner
+        self.assertIn(builder.xykey(bolt), mandatory)
+        legacy = mandatory | {builder.xykey(points[1])}
+        selected = builder.select_longitudinal_lines(
+            segments, legacy, 2, 5.0, mandatory_keep=mandatory)
+        self.assertTrue(mandatory <= selected)
+        # The low-turn line only 2 mm from the sharp corner must be removed.
+        self.assertNotIn(builder.xykey(points[1]), selected)
+
     def test_optional_lines_respect_minimum_section_path_spacing(self):
         radius = 20.0
         points = [(radius*math.cos(i*math.pi/40.), radius*math.sin(i*math.pi/40.))
