@@ -117,5 +117,32 @@ class AssemblyProjectorTests(unittest.TestCase):
 
 
 
+    def test_seam_points_inside_segments_are_interpolated_without_changing_reference_basis(self):
+        pieces={
+            'P1': [[10.,10.,20.,10.],[20.,10.,20.,20.]],
+            'P2': [[-10.,10.,-10.,20.],[-10.,20.,-20.,20.]],
+            'P3': [[-10.,-10.,-20.,-10.],[-20.,-10.,-20.,-20.]],
+            'P4': [[10.,-10.,10.,-20.],[10.,-20.,20.,-20.]],
+        }
+        seams=[
+            [1,1,2,15.,10.,-10.,15.],
+            [2,2,3,-10.,15.,-15.,-10.],
+            [3,3,4,-15.,-10.,10.,-15.],
+            [4,4,1,10.,-15.,15.,10.],
+        ]
+        ref=section.build_reference_section(pieces,3.,200000.,.3,3600.,seams=seams)
+        original_hash=ref['definition_hash']
+        n=len(ref['nodes'])
+        U=np.zeros((n,3)); UR=np.zeros((n,3))
+        base=a.seam_relative_diagnostics(dict(U=U,UR=UR),ref)
+        self.assertEqual(base['normal_opening_index'],0.)
+        a.impose_test_seam_motion(U,ref,1,'normal',1.)
+        moved=a.seam_relative_diagnostics(dict(U=U,UR=UR),ref)
+        target=next(v for v in moved['values'] if v['id']==1)
+        self.assertGreater(abs(target['normal']),0.99)
+        self.assertEqual(ref['definition_hash'],original_hash)
+
+
+
 if __name__=='__main__':
     unittest.main()
