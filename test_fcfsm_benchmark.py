@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import numpy as np
 import verify_fcfsm_classifier_benchmark as b
+import fcfsm_reference_basis as fb
 
 
 def fixture():
@@ -79,6 +80,55 @@ class FcfsmBenchmarkTests(unittest.TestCase):
             result=b.compare_with_cufsm_reference(rp,cp)
         self.assertEqual(result['reference_source']['version'],'5.70')
         self.assertEqual(result['harmonic']['m'],2)
+
+
+    def test_native_reference_can_generate_stage_a_fixture_from_actual_implementation(self):
+        nodes=[[0.,0.],[50.,0.],[50.,100.],[0.,100.]]
+        thickness=2.0; E=200000.; nu=.3; length=1000.; harmonic=2
+        reference_model=b.reference_model_from_fixture(dict(
+            geometry=dict(name='open_channel',nodes=nodes,thickness_mm=thickness,
+                          elements=[[1,2],[2,3],[3,4]],corner_element_ids=[]),
+            material=dict(E_MPa=E,nu=nu),
+            boundary_conditions=dict(longitudinal='S-S'),
+            harmonic=dict(m=harmonic,length_mm=length)))
+        basis=fb.build_fcfsm_basis(reference_model,harmonic)
+        probe=np.linspace(.1,1.6,4*len(nodes))
+        projected=basis.project(probe)
+        native=dict(
+            schema_version=2,
+            source=dict(program='CUFSM',version='5.70',method='native test fixture'),
+            geometry=dict(name='open_channel',nodes=nodes,thickness_mm=thickness,
+                          elements=[[1,2],[2,3],[3,4]],corner_element_ids=[]),
+            material=dict(E_MPa=E,nu=nu),
+            boundary_conditions=dict(longitudinal='S-S'),
+            harmonic=dict(m=harmonic,length_mm=length),
+            probe_vector=probe.tolist(),
+            K0=basis.K0.tolist(),
+            families={
+                'L':dict(share_percent=projected['energy_percent'][0],basis=basis.C_L.tolist()),
+                'D':dict(share_percent=projected['energy_percent'][1],basis=basis.C_D.tolist()),
+                'G':dict(share_percent=projected['energy_percent'][2],basis=basis.C_G.tolist())})
+        classifier=b.classifier_fixture_from_cufsm_reference(native)
+        result=b.compare_with_cufsm_reference(
+            native,classifier,share_tolerance_pp=1e-8,
+            minimum_cosine_squared=.999999999,k0_relative_tolerance=1e-10)
+        self.assertTrue(result['passed'])
+        self.assertLess(result['k0_relative_frobenius_error'],1e-12)
+        self.assertEqual(classifier['source']['method'],'FCFSM_K0_ENERGY')
+
+    def test_end_to_end_reference_requires_probe_k0_and_explicit_connectivity(self):
+        reference,classifier=fixture()
+        reference['schema_version']=2
+        for missing in ('probe_vector','K0'):
+            broken=copy.deepcopy(reference)
+            with self.subTest(missing=missing), self.assertRaisesRegex(ValueError,missing):
+                b.classifier_fixture_from_cufsm_reference(broken)
+        broken=copy.deepcopy(reference)
+        broken['probe_vector']=[0.]*4
+        broken['K0']=np.eye(4).tolist()
+        with self.assertRaisesRegex(ValueError,'geometry.elements'):
+            b.classifier_fixture_from_cufsm_reference(broken)
+
 
 
 if __name__=='__main__':
