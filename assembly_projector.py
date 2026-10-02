@@ -159,7 +159,9 @@ def seam_relative_diagnostics(mode,reference):
     center=np.sum(weights[:,None]*corrected,axis=0)/np.sum(weights)
     corrected=corrected-center
     base=math.sqrt(float(np.sum(weights[:,None]*corrected*corrected)/np.sum(weights)))
-    if base<=1e-250:
+    radius=max(1.0, math.sqrt(float(np.sum(weights*np.sum(xyz[:,:2]**2,axis=1))/np.sum(weights))))
+    total_scale=math.sqrt(float(np.sum(weights[:,None]*(u*u+(radius*ur)*(radius*ur)))/np.sum(weights)))
+    if base<=max(1e-250, 1e-12*total_scale):
         indices=[0.,0.,0.]
     else:
         indices=[100.*math.sqrt(np.mean([v[k]**2 for v in vals]))/base
