@@ -298,6 +298,9 @@ def resume_postprocessing(run_dir, modal_audit=False):
         state['updated_at'] = datetime.datetime.now().isoformat()
         with open(status_path, 'w') as stream:
             json.dump(state, stream, indent=2)
+    stages=['ODB_POST','ENHANCED']+(['MODAL_AUDIT'] if modal_audit else [])
+    weights=[40.,35.]+([25.] if modal_audit else [])
+    tracker=ProgressTracker(stages,weights,emit=progress)
     try:
         if 'error' in state:
             state['recovered_from_error'] = state.pop('error')
@@ -306,16 +309,23 @@ def resume_postprocessing(run_dir, modal_audit=False):
         state['completion_evidence'] = evidence
         save('POSTPROCESSING')
         progress('RESUME: '+evidence+'. No model rebuild or solver submission.')
-        progress('3/4 POSTPROCESS: all modes from '+report['odb'])
+        tracker.start('ODB_POST')
         state['postprocessing'] = processor.main(postprocess_arguments(report))
+        tracker.finish('ODB_POST',note='%d modes processed' %
+                       state['postprocessing']['processed_modes'])
+        state['progress']=tracker.summary()
         if state['postprocessing']['available_modes'] < state['settings']['n_modes']:
             progress('WARNING: fewer modes available than requested; see modal report.')
         save('ENHANCED_POSTPROCESSING')
-        progress('4/4 ENHANCED: mode families, spectra, envelopes and interactive report.')
+        tracker.start('ENHANCED')
         state['enhanced_report'] = enhanced.main(enhanced_arguments(report))
+        tracker.finish('ENHANCED')
+        state['progress']=tracker.summary()
         if modal_audit:
-            progress('AUDIT: direct shapes, sensitivity and graphical explorer.')
+            tracker.start('MODAL_AUDIT')
             state['modal_audit'] = run_modal_audit(run_dir)
+            tracker.finish('MODAL_AUDIT')
+            state['progress']=tracker.summary()
         save('COMPLETED')
         progress('COMPLETE: recovered postprocessing; %d modes processed.' %
                  state['postprocessing']['processed_modes'])
