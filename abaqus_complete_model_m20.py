@@ -42,6 +42,7 @@ import time
 
 from abaqus_progress import ProgressTracker, solver_estimate_fraction
 from abaqus_resource_policy import resolve_resource_plan
+import parquet_export_runner
 
 # CAE noGUI executes scripts without defining __file__.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(
@@ -144,6 +145,12 @@ def parse_arguments(argv=None):
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--skip-post', action='store_true', help='Build and solve, without wavelength processing')
     parser.add_argument('--modal-audit', action='store_true', help='After reports, create the direct-shape audit and graphical explorer')
+    parser.add_argument('--parquet-export', choices=('auto','off','required'), default='auto',
+                        help='With --modal-audit, export a compact Parquet review bundle. auto uses PyArrow when available; required fails before solve if unavailable.')
+    parser.add_argument('--parquet-python',
+                        help='Optional explicit normal-Python executable containing PyArrow; used when Abaqus Python lacks PyArrow.')
+    parser.add_argument('--parquet-harmonic-min-share', type=float, default=.001,
+                        help='Minimum harmonic share stored with per-node Parquet coefficients; dominant harmonic is always retained.')
     parser.add_argument('--check-inputs', action='store_true', help='Validate CSVs and settings only')
     parser.add_argument('--resume-post', metavar='RUN_DIR',
                         help='Verify completed run and postprocess its ODB; never build or submit')
@@ -155,6 +162,11 @@ def parse_arguments(argv=None):
         parser.error('--longitudinal-line-min-spacing-mm must be a finite nonnegative number')
     if args.modal_audit and args.skip_post:
         parser.error('--modal-audit requires postprocessing; remove --skip-post')
+    if args.parquet_export == 'required' and (not args.modal_audit or args.build_only):
+        parser.error('--parquet-export required needs a real --modal-audit run; it cannot be used alone or with --build-only')
+    if (not math.isfinite(args.parquet_harmonic_min_share) or
+            args.parquet_harmonic_min_share < 0 or args.parquet_harmonic_min_share > 1):
+        parser.error('--parquet-harmonic-min-share must be finite and between 0 and 1')
     if args.resume_post and (args.build_only or args.skip_post or args.check_inputs or args.output_dir or args.output_root):
         parser.error('--resume-post cannot be combined with build/check/skip/output options')
     if not math.isfinite(args.mesh_mm) or args.mesh_mm <= 0:
@@ -280,7 +292,23 @@ def run_modal_audit(run_dir, progress_callback=None):
                 mesh_shape_archive=summary.get('mesh_shape_archive'))
 
 
-def resume_postprocessing(run_dir, modal_audit=False):
+def resolve_parquet_runtime(modal_audit, policy='auto', preferred_python=None):
+    if not modal_audit or str(policy).lower() == 'off':
+        return dict(available=False,policy='off',status='PARQUET_EXPORT_DISABLED')
+    return parquet_export_runner.prepare_runtime(policy,preferred_python)
+
+
+def run_parquet_export(run_dir,audit_info,runtime,min_share=.001):
+    if not audit_info or not audit_info.get('output_dir'):
+        raise ValueError('Parquet export requires a completed modal-audit output directory')
+    return parquet_export_runner.export_run(
+        run_dir,audit_info['output_dir'],runtime,
+        output_root=audit_info['output_dir'],
+        harmonic_section_min_share=min_share)
+
+
+def resume_postprocessing(run_dir, modal_audit=False, parquet_export='auto',
+                          parquet_python=None, parquet_harmonic_min_share=.001):
     """Recover existing results without requiring source CSVs or a CAE session."""
     from types import SimpleNamespace
     run_dir = os.path.abspath(os.path.expanduser(run_dir))
@@ -300,9 +328,16 @@ def resume_postprocessing(run_dir, modal_audit=False):
         state['updated_at'] = datetime.datetime.now().isoformat()
         with open(status_path, 'w') as stream:
             json.dump(state, stream, indent=2)
-    stages=['ODB_POST','ENHANCED']+(['MODAL_AUDIT'] if modal_audit else [])
-    weights=[40.,35.]+([25.] if modal_audit else [])
+    parquet_runtime=resolve_parquet_runtime(
+        modal_audit,parquet_export,parquet_python)
+    stages=['ODB_POST','ENHANCED']
+    weights=[35.,30.]
+    if modal_audit:
+        stages.append('MODAL_AUDIT'); weights.append(25.)
+        if parquet_runtime.get('available'):
+            stages.append('PARQUET_EXPORT'); weights.append(10.)
     tracker=ProgressTracker(stages,weights,emit=progress)
+    state.setdefault('settings',{})['parquet_runtime']=parquet_runtime
     try:
         if 'error' in state:
             state['recovered_from_error'] = state.pop('error')
@@ -335,6 +370,19 @@ def resume_postprocessing(run_dir, modal_audit=False):
                 run_dir,progress_callback=audit_progress)
             tracker.finish('MODAL_AUDIT')
             state['progress']=tracker.summary()
+            if parquet_runtime.get('available'):
+                tracker.start('PARQUET_EXPORT')
+                progress('PARQUET_EXPORT: compact review bundle for upload/analysis.')
+                state['parquet_bundle']=run_parquet_export(
+                    run_dir,state['modal_audit'],parquet_runtime,
+                    parquet_harmonic_min_share)
+                tracker.finish('PARQUET_EXPORT',
+                               note=os.path.basename(state['parquet_bundle'].get('zip_path','bundle')))
+                state['progress']=tracker.summary()
+            elif str(parquet_export).lower()!='off':
+                state['parquet_bundle']=dict(
+                    status='PARQUET_EXPORT_UNAVAILABLE',runtime=parquet_runtime)
+                progress('WARNING: Parquet bundle skipped because no PyArrow runtime was found.')
         save('COMPLETED')
         progress('COMPLETE: recovered postprocessing; %d modes processed.' %
                  state['postprocessing']['processed_modes'])
@@ -952,7 +1000,10 @@ def main(argv=None):
     global LONGITUDINAL_LINES, LONGITUDINAL_LINE_MIN_SPACING_MM
     args = parse_arguments(argv)
     if args.resume_post:
-        return resume_postprocessing(args.resume_post, modal_audit=args.modal_audit)
+        return resume_postprocessing(
+            args.resume_post,modal_audit=args.modal_audit,
+            parquet_export=args.parquet_export,parquet_python=args.parquet_python,
+            parquet_harmonic_min_share=args.parquet_harmonic_min_share)
     BUILTUP_DIR, MESH_MM = args.builtup_dir, args.mesh_mm
     LONGITUDINAL_LINES = args.longitudinal_lines
     LONGITUDINAL_LINE_MIN_SPACING_MM = args.longitudinal_line_min_spacing_mm
@@ -960,12 +1011,15 @@ def main(argv=None):
     validate_settings()
     inputs = read_model_inputs(BUILTUP_DIR)
     resource_plan = resolve_resource_plan(args.cpus, args.gpus, work_items=args.n_modes)
+    parquet_runtime=resolve_parquet_runtime(
+        args.modal_audit and not args.build_only,args.parquet_export,args.parquet_python)
     settings = vars(args).copy()
     settings['resource_plan'] = resource_plan
     settings['cpus_resolved'] = resource_plan['cpus']
     settings['gpus_resolved'] = resource_plan['gpus']
     settings['effective_buckle_output'] = 'classification_only_U_UR'
     settings['automatic_shell_energy'] = False
+    settings['parquet_runtime'] = parquet_runtime
     if args.check_inputs:
         print(json.dumps(dict(settings=settings, source_inputs=input_summary(inputs)), indent=2))
         return
@@ -987,7 +1041,9 @@ def main(argv=None):
         if processor is not None:
             stages.extend(['ODB_POST', 'ENHANCED']); weights.extend([8.0, 8.0])
             if args.modal_audit:
-                stages.append('MODAL_AUDIT'); weights.append(14.0)
+                stages.append('MODAL_AUDIT'); weights.append(12.0)
+                if parquet_runtime.get('available'):
+                    stages.append('PARQUET_EXPORT'); weights.append(4.0)
     run_signature = '%s|mesh=%g|modes=%d|vectors=%d' % (
         os.path.basename(os.path.normpath(BUILTUP_DIR)), MESH_MM, N_MODES, N_VECTORS)
     history_path = os.path.join(os.path.dirname(output_dir), '.abaqus_progress_history.json')
@@ -1005,6 +1061,9 @@ def main(argv=None):
             stream.write('standard_parallel = SOLVER\n')
         progress('Output directory: '+output_dir)
         progress('Settings: '+json.dumps(settings, sort_keys=True))
+        if (args.modal_audit and args.parquet_export != 'off' and
+                not parquet_runtime.get('available')):
+            progress('WARNING: Parquet export requested in auto mode but PyArrow is unavailable; core Abaqus/audit outputs will continue.')
         tracker.start('BUILD')
         progress('BUILD: geometry, mesh, contact, CAE and INP.')
         if args.buckle_output == 'detailed':
@@ -1073,6 +1132,17 @@ def main(argv=None):
                 state['modal_audit'] = run_modal_audit(
                     output_dir,progress_callback=audit_progress)
                 tracker.finish('MODAL_AUDIT')
+                if parquet_runtime.get('available'):
+                    tracker.start('PARQUET_EXPORT')
+                    progress('PARQUET_EXPORT: compact review bundle for upload/analysis.')
+                    state['parquet_bundle']=run_parquet_export(
+                        output_dir,state['modal_audit'],parquet_runtime,
+                        args.parquet_harmonic_min_share)
+                    tracker.finish('PARQUET_EXPORT',
+                                   note=os.path.basename(state['parquet_bundle'].get('zip_path','bundle')))
+                elif args.parquet_export != 'off':
+                    state['parquet_bundle']=dict(
+                        status='PARQUET_EXPORT_UNAVAILABLE',runtime=parquet_runtime)
         else:
             progress('3/4 and 4/4 POSTPROCESS skipped by --skip-post.')
         state['progress'] = tracker.summary()
