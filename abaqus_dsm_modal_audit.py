@@ -29,6 +29,113 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)  # The CAE pipeline changes cwd to the run directory.
 import abaqus_modal_visuals as visuals
 import abaqus_modal_validation as validation
+from abaqus_modal_archive import (extract_modal_archive, open_modal_archive,
+                                  map_mode_to_reference,
+                                  MechanicalClassificationUnavailable)
+from builtup_reference_section import build_reference_section
+from fcfsm_reference_basis import build_fcfsm_basis
+from abaqus_modal_harmonics import decompose_mode
+from assembly_projector import assembly_diagnostics, seam_relative_diagnostics
+from mechanical_modal_classifier import classify_modes_parallel, classify_eigenspace
+from abaqus_resource_policy import resolve_resource_plan
+
+
+def mechanical_classification_state(fields):
+    available=set(str(x) for x in (fields or []))
+    missing=[name for name in ('U','UR') if name not in available]
+    if missing:
+        return dict(available=False,method='GEOMETRIC_SCREENING_ONLY',
+                    status='MECHANICAL_CLASSIFICATION_UNAVAILABLE_MISSING_'+('_'.join(missing)))
+    return dict(available=True,method='FCFSM_K0_ENERGY',status='AVAILABLE')
+
+
+def _seams_from_build(build):
+    source=build.get('source_inputs') or {}
+    seams=source.get('seams')
+    if seams:
+        return seams
+    directory=source.get('source_directory')
+    if directory:
+        path=os.path.join(directory,'builtup_seams.csv')
+        if os.path.isfile(path):
+            rows=[]
+            with open(path,newline='') as stream:
+                for row in csv.reader(stream):
+                    if row and any(str(v).strip() for v in row):
+                        rows.append([float(v) for v in row[:7]])
+            return rows
+    return []
+
+
+def canonical_reference_from_build(build):
+    source=build.get('source_inputs') or {}
+    required=('section_segments','thickness_mm','E_MPa','nu','length_mm')
+    missing=[k for k in required if source.get(k) is None]
+    if missing:
+        raise ValueError('Build report lacks canonical reference inputs: '+', '.join(missing))
+    connection={k:source.get(k) for k in (
+        'bolt_positions_mm','bolts_per_seam','pitch_mm','start_end_mm','finish_end_mm',
+        'clear_gap_mm','bolt_row_mm') if k in source}
+    return build_reference_section(
+        source['section_segments'],source['thickness_mm'],source['E_MPa'],source['nu'],
+        source['length_mm'],seams=_seams_from_build(build),connection_metadata=connection)
+
+
+def merge_mechanical_row(geometric, mechanical):
+    row=dict(geometric)
+    row['geometric_screening_family']=geometric.get('family')
+    row['geometric_screening_percentages']=list(geometric.get('percentages') or [])
+    row['geometric_screening_flags']=list(geometric.get('flags') or [])
+    final=str(mechanical.get('family','UNRESOLVED')).upper()
+    legacy={'LOCAL':'L','DISTORTIONAL':'D','GLOBAL':'G',
+            'MIXED':'Mixed','UNRESOLVED':'Unresolved'}.get(final,'Unresolved')
+    row.update({k:v for k,v in mechanical.items() if not k.startswith('_')})
+    row['final_family']=final
+    row['family']=legacy
+    energy=list(mechanical.get('energy_percent') or [0.,0.,0.,0.])
+    vector=list(mechanical.get('vector_percent') or [0.,0.,0.,0.])
+    row['percentages']=energy[:3]
+    row['percentage_kind']='FCFSM_K0_ENERGY_PRIMARY'
+    row['relative_residual']=float(mechanical.get('mechanical_residual_percent',0.0))/100.0
+    row['condition']=mechanical.get('basis_condition')
+    row['energy']=None
+    row['energy_status']='FCFSM_K0_ENERGY_PRIMARY'
+    row['mechanical_eligible']=bool(final in ('LOCAL','DISTORTIONAL','GLOBAL')
+                                    and mechanical.get('quality_state')!='UNRESOLVED')
+    row['flags']=sorted(set(list(mechanical.get('flags') or [])))
+    row['rigid_diagnostics']=dict(assembly_percent=mechanical.get('assembly_percent'))
+    for name,value in zip(('L','D','G','O'),energy):
+        row[name+'_energy_percent']=value
+    for name,value in zip(('L','D','G','O'),vector):
+        row[name+'_vector_percent']=value
+    return row
+
+
+def modal_csv_fields():
+    return [
+        'mode','eigenvalue','stress_MPa','dominant_m','half_wavelength_mm',
+        'L_energy_percent','D_energy_percent','G_energy_percent','O_energy_percent',
+        'L_vector_percent','D_vector_percent','G_vector_percent','O_vector_percent',
+        'assembly_percent','seam_normal_opening_index','seam_transverse_slip_index',
+        'seam_longitudinal_slip_index','interpiece_interaction_percent',
+        'final_family','quality_state','flags','harmonic_residual',
+        'mechanical_residual_percent','metric_sensitivity_pp','cluster_id',
+        'geometric_screening_family','geometric_screening_percentages',
+        'percentage_kind','mechanical_eligible','basis_condition','numeric_backend',
+        'energy_closure_relative','cross_terms_percent','basis_hashes',
+        'eigenspace_stable_family','eigenspace_L_min','eigenspace_L_max',
+        'eigenspace_D_min','eigenspace_D_max','eigenspace_G_min','eigenspace_G_max',
+        # Legacy columns retained for existing downstream readers.
+        'dominant_halfwaves','family','L_percent','D_percent','G_percent',
+        'relative_residual','displacement_cross_percent','condition',
+        'energy_status','energy_L_percent','energy_D_percent','energy_G_percent',
+        'energy_R_percent','energy_cross_terms_percent','spectral_fit_error',
+        'dominant_spectral_share','transverse_share','raw_vs_fitted_max_pp',
+        'sensitivity_range_pp','relative_piece_rigid_percent','other_percent',
+        'wall_curvature_index'
+    ]
+
+
 
 
 def orth(a, tol=1e-10):
@@ -389,6 +496,8 @@ def close_clusters(rows, tolerance):
 
 
 def process(args):
+    # Automatic Stage-A path extracts U+UR once, then classifies the numeric
+    # archive outside the ODB reader through classify_modes_parallel.
     from odbAccess import openOdb
     base = load_module('audit_base', 'abaqus_modal_wavelengths.py')
     enhanced = load_module('audit_enhanced', 'abaqus_modal_report.py')
