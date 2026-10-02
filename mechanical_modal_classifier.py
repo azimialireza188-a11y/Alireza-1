@@ -138,16 +138,29 @@ def classify_mode(mode_record, harmonic_result, basis_provider, diagnostics, set
         m=int(key)
         basis=_basis_for(basis_provider,m)
         q=reference_mode_vector(components[key],basis)
+        k=np.asarray(basis.K0,dtype=float)
+        if k.shape != (len(q),len(q)):
+            raise ValueError('Basis K0 and harmonic vector size differ')
+        report=getattr(basis,'condition_report',{})
+        condition.append(float(report.get('energetic_condition',1.0)))
+        basis_hashes[m]=getattr(basis,'definition_hash',None)
+        if float(np.linalg.norm(q)) <= 1e-14:
+            zero_metric=_energy_metric_vector(np.zeros_like(q),k)
+            for name in FAMILIES:
+                metric_chunks[name].append(zero_metric.copy())
+            continue
         projected=basis.project(q)
         parts={name:np.asarray(projected['components'][name],dtype=float).reshape(-1)
                for name in ('L','D','G')}
         parts['O']=np.asarray(projected.get('residual',np.zeros_like(q)),dtype=float).reshape(-1)
-        k=np.asarray(basis.K0,dtype=float)
-        if k.shape != (len(q),len(q)):
-            raise ValueError('Basis K0 and harmonic vector size differ')
         ein=.5*float(q@(k@q))
-        if not math.isfinite(ein) or ein <= 1e-250:
-            raise ValueError('Harmonic has zero/nonpositive K0 energy')
+        if not math.isfinite(ein) or ein < -1e-12:
+            raise ValueError('Harmonic has negative/nonfinite K0 energy')
+        if ein <= 1e-250:
+            zero_metric=_energy_metric_vector(np.zeros_like(q),k)
+            for name in FAMILIES:
+                metric_chunks[name].append(zero_metric.copy())
+            continue
         input_energy += ein
         for name in FAMILIES:
             p=parts[name]
@@ -156,9 +169,6 @@ def classify_mode(mode_record, harmonic_result, basis_provider, diagnostics, set
             metric_chunks[name].append(_energy_metric_vector(p,k))
         for a,b in itertools.combinations(FAMILIES,2):
             cross[a+':'+b] += float(parts[a]@(k@parts[b]))
-        report=getattr(basis,'condition_report',{})
-        condition.append(float(report.get('energetic_condition',1.0)))
-        basis_hashes[m]=getattr(basis,'definition_hash',None)
 
     diagonal_total=sum(max(0.0,x) for x in diag_energy.values())
     if diagonal_total <= 1e-250:
