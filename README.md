@@ -13,13 +13,47 @@ abaqus cae noGUI=abaqus_complete_model_m20.py -- ^
   --n-modes 250 ^
   --n-vectors 500 ^
   --max-iterations 1250 ^
-  --cpus 8 ^
+  --cpus auto ^
+  --gpus auto ^
   --buckle-output detailed ^
   --nodal-precision full ^
   --longitudinal-lines 2 ^
   --longitudinal-line-min-spacing-mm 5 ^
   --modal-audit
 ```
+
+
+## Mechanical Stage-A modal classification
+
+For new runs with `--modal-audit`, the primary classifier is now a whole-built-up-section, fcFSM-style **mechanical** decomposition. All four physical pieces enter one L/D/G definition, but no continuous tie, translational compatibility, rotational compatibility, artificial plate or stiffness is inserted across the physical gaps. The real discrete Abaqus bolts affect the observed eigenmode/eigenvalue; bolt spacing does not enter the reference-family definition.
+
+The primary reported shares are `K0` elastic-energy `L/D/G/O`. `Assembly` is a separate relative-piece-motion diagnostic and is **not subtracted from the eigenmode and is not added to L/D/G/O**. Seam opening, transverse sliding and longitudinal slip are reported separately. The older geometry-based classifier remains in the same audit only as `geometric_screening_*` evidence.
+
+New buckling runs store `U + UR`. A legacy ODB that contains only `U` remains readable for geometric screening but is explicitly marked `MECHANICAL_CLASSIFICATION_UNAVAILABLE_MISSING_UR`; missing rotations are never replaced by zeros.
+
+Automatic audit flow:
+
+```text
+Abaqus eigenmode U+UR
+  -> one-pass numeric archive
+  -> canonical four-piece reference (no cross-gap constraints)
+  -> multi-harmonic S-S decomposition
+  -> K0/fcFSM L-D-G-O projection
+  -> Assembly + seam diagnostics
+  -> repeated-eigenvalue/eigenspace check
+  -> CSV / JSON / HTML / piece-wise mode plots
+```
+
+The output `mode_sections.png` keeps the original gray section and independently colored pieces. Each panel now separates: mechanical family + K0 L/D/G/O, geometric screening, Assembly/seam diagnostics, and quality flags.
+
+### Aggressive resources and progress
+
+The default resource policy has no artificial CPU or RAM reserve. `--cpus auto` (also the default when `--cpus` is omitted) uses all detected logical CPUs; `--gpus auto` uses supported detected GPUs where the active Abaqus/numerical backend accepts them and otherwise records a CPU fallback. Abaqus Job memory is requested as 100 percent of host memory rather than the previous fixed 24000 MB ceiling. An explicit value such as `--cpus 8` remains a supported manual override.
+
+Long operations print aggregate progress rather than worker spam: current stage, stage/overall percentage, exact `done/total` for countable work, elapsed time, rate, remaining stages and ETA. Abaqus solver progress that cannot be derived from an exact solver counter is visibly labeled `ESTIMATED` and is capped below 100% until successful completion is verified.
+
+The automatic mechanical audit records reference/basis hashes, retained harmonics, resource layout and numerical backend in `modal_audit.json`. Synthetic checks and the CUFSM/fcFSM comparison harness are described in `README_modal_validation.md`. Stage A should not be treated as independently validated against CUFSM until that external benchmark has actually been executed for a compatible open-section case.
+
 
 `--longitudinal-lines` controls the section boundaries retained during native
 CAE geometry creation and meshing, before writing the INP:
@@ -50,7 +84,7 @@ bypassing the spacing filter. Value `1` is invalid.
 The root builder includes the longitudinal-line changes from `code-change` and
 retains the root pipeline's precision, reporting and audit features. Run the
 root script. `--buckle-output detailed` remains a compatibility option: the
-current buckling pipeline writes `U` for classification, not shell `S/E/SF/SE`.
+current buckling pipeline writes only nodal `U + UR` required by the mechanical classifier, not shell `S/E/SF/SE`.
 Add `--build-only` to create CAE/INP without solving, or `--check-inputs` to
 validate arguments and source CSVs without starting the model build.
 
