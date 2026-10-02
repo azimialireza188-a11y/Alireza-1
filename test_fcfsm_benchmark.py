@@ -119,13 +119,17 @@ class FcfsmBenchmarkTests(unittest.TestCase):
     def test_end_to_end_reference_requires_probe_k0_and_explicit_connectivity(self):
         reference,classifier=fixture()
         reference['schema_version']=2
+        reference['geometry']['elements']=[[1,2],[2,3]]
+        reference['geometry']['corner_element_ids']=[]
+        reference['probe_vector']=[0.]*12
+        reference['K0']=np.eye(12).tolist()
         for missing in ('probe_vector','K0'):
             broken=copy.deepcopy(reference)
+            del broken[missing]
             with self.subTest(missing=missing), self.assertRaisesRegex(ValueError,missing):
                 b.classifier_fixture_from_cufsm_reference(broken)
         broken=copy.deepcopy(reference)
-        broken['probe_vector']=[0.]*4
-        broken['K0']=np.eye(4).tolist()
+        del broken['geometry']['elements']
         with self.assertRaisesRegex(ValueError,'geometry.elements'):
             b.classifier_fixture_from_cufsm_reference(broken)
 
