@@ -240,7 +240,7 @@ class PipelineTests(unittest.TestCase):
             argv = ['--builtup-dir', root, '--output-dir', output, '--mesh-mm', '12.5',
                     '--n-modes', '100', '--n-vectors', '200', '--max-iterations', '400',
                     '--longitudinal-lines', '2', '--buckle-output', 'detailed',
-                    '--nodal-precision', 'full', '--modal-audit']
+                    '--nodal-precision', 'full', '--modal-audit', '--parquet-export', 'off']
             defaults = {k: getattr(builder, k) for k in
                 ('BUILTUP_DIR', 'MESH_MM', 'N_MODES', 'N_VECTORS', 'MAX_ITERATIONS',
                  'LONGITUDINAL_LINES')}
@@ -301,7 +301,9 @@ class PipelineTests(unittest.TestCase):
              mock.patch.object(builder, 'read_model_inputs', side_effect=AssertionError('Unexpected CSV read')), \
              mock.patch.object(builder, 'build', side_effect=AssertionError('Unexpected rebuild')):
             self.assertEqual(builder.main(['--resume-post', 'previous run']), 'recovered')
-            resume.assert_called_once_with('previous run', modal_audit=False)
+            resume.assert_called_once_with(
+                'previous run',modal_audit=False,parquet_export='auto',
+                parquet_python=None,parquet_harmonic_min_share=.001)
 
 
     def test_resume_postprocessing_uses_standard_progress_tracker(self):
