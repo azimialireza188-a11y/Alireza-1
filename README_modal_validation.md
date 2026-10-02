@@ -66,3 +66,52 @@ K باید سختی الاستیک مثبت‌معینِ همان درجات آ�
 * مقادیر ویژه در ODB مورد بررسی از متن فریم استخراج می‌شوند؛ `frameValue` در این خروجی شمارهٔ مود است. دقت ارقام از دقت ذخیره‌شدهٔ حلگر بیشتر ادعا نمی‌شود.
 
 گزارش CUFSM موجود برای این مقطع، Fcre را با منبع `Abaqus shell FE` ذخیره کرده است. آن مقدار مرجع مستقل برای تأیید خود Abaqus نیست. همچنین مرجع تک‌قطعه‌ای L/D و مدل اتصال بدون تماس را نباید بدون اثبات هم‌ارزی به‌عنوان خانواده‌های ستون کامل پذیرفت.
+
+
+## بنچمارک مستقل classifier مکانیکی جدید با CUFSM/fcFSM 5.70
+
+برای Stage A جدید، قبولی تست‌های synthetic فقط صحت جبری پیاده‌سازی را نشان می‌دهد و **جای مرجع مستقل CUFSM را نمی‌گیرد**. ابزار جدید:
+
+`verify_fcfsm_classifier_benchmark.py`
+
+دو سطح آزمون دارد:
+
+1. `run_synthetic_benchmarks()` — کنترل تحلیلی خالص L/D/G روی دستگاهی که جواب دقیق آن معلوم است؛
+2. `compare_with_cufsm_reference(...)` — مقایسه با خروجی مستقل CUFSM/fcFSM از نظر **سهم خانواده** و **زاویه‌های اصلی زیرفضای خانواده**. علامت، scale و rotation داخلی basis باعث رد کاذب نمی‌شوند.
+
+مرجع خارجی JSON باید حداقل این provenance را داشته باشد: `source.program=CUFSM`، نسخه (برای این پروژه `5.70`)، روش `fcFSM`، هندسه و ضخامت کامل benchmark، `E` و `nu`، شرط مرزی `S-S`، طول و harmonic number و برای هر یک از `L/D/G` سهم و basis. ابزار، ناسازگاری هندسه، مصالح، BC یا harmonic را **رد** می‌کند؛ آن‌ها را برای نزدیک‌تر شدن جواب silently reconcile نمی‌کند.
+
+### روش تولید مرجع در MATLAB/CUFSM
+
+برای benchmark بازِ ساده و مستقل از عضو چهارقطعه‌ای پیچ‌دار، از کد واقعی repository استفاده کنید. توابع مرجع موجود در `cufsm-git-5.70/analysis/fcFSM/` هستند:
+
+```matlab
+[C_L,J_D,J_GD] = SecAnal_fcFSM(node,elem,cornerStrips);
+
+[curve,shapes,clas, ...
+ curveL,shapesL,curveD,shapesD,curveG,shapesG] = ...
+    stripmain_fcFSM(prop,node,elem,lengths,springs,constraints, ...
+                    GBTcon,'S-S',m_all,neigs,ifVec,cornerStrips);
+```
+
+`SecAnal_fcFSM.m` تعریف‌های نیروپایه را مستقیماً می‌سازد: `C_L=null(J_GD')`، `J_D` از تعادل `Fx/Fz/T`، و در `stripmain_fcFSM.m` با K همان طول/harmonic، فضاهای D و G تشکیل می‌شوند. curved-corner strips باید در `cornerStrips` ثبت شوند و در تعریف flat plates وارد نشوند.
+
+روال benchmark پیشنهادی:
+
+1. یک open section ساده با geometry/material معلوم بسازید؛
+2. فقط `S-S` و harmonic مشخص، مثلاً `m=2`، را اجرا کنید؛
+3. خروجی family basis و family result همان case را بدون تغییر در یک JSON با schema بالا export کنید؛
+4. خروجی Python Stage A را برای **همان** geometry/material/BC/harmonic export کنید؛
+5. اجرا:
+
+```bat
+python verify_fcfsm_classifier_benchmark.py ^
+  --reference cufsm_fcfsm_reference.json ^
+  --classifier stage_a_classifier_reference.json ^
+  --output fcfsm_classifier_comparison.json
+```
+
+پیش‌فرض مقایسه: اختلاف سهم حداکثر 1 percentage point و minimum cosine-squared زیرفضای متناظر حداقل 0.99. این حدود numerical validation هستند، نه حدود آیین‌نامه‌ای.
+
+اگر MATLAB/CUFSM در محیط اجرا موجود نباشد، external benchmark باید با وضعیت **NOT_REQUESTED / not executed** باقی بماند. تست synthetic هرگز اجازه ندارد به‌جای آن «CUFSM benchmark passed» گزارش کند.
+
