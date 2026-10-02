@@ -888,7 +888,7 @@ def build(inputs=None, cpus=8, gpus=0, buckle_output='standard', nodal_precision
     # Do not request S/E/SF/SE at every shell section point: those fields are
     # not used by the current Local/Distortional/Global classifier and can
     # dominate ODB size and postprocessing time for hundreds of modes.
-    model.FieldOutputRequest(name='ModeShapes', createStepName='Buckle', variables=('U',))
+    model.FieldOutputRequest(name='ModeShapes', createStepName='Buckle', variables=('U', 'UR'))
     for name in list(model.historyOutputRequests.keys()):
         del model.historyOutputRequests[name]
     job.writeInput(consistencyChecking=ON)
@@ -916,8 +916,8 @@ def build(inputs=None, cpus=8, gpus=0, buckle_output='standard', nodal_precision
     report['source_inputs'] = input_summary(inputs)
     report['modal_output'] = dict(
         profile='classification_only', requested_legacy_profile=buckle_output,
-        nodal_precision=nodal_precision, fields=['U'],
-        mode_shape_components='U field used for transverse nodal eigenmode shapes; shell rotations are not required by the classifier',
+        nodal_precision=nodal_precision, fields=['U', 'UR'],
+        mode_shape_components='Global nodal U and UR fields used by the mechanical classifier; shell rotations are required',
         deliberately_omitted_fields=['S', 'E', 'SF', 'SE'],
         convention='Normalized perturbation mode shapes only; shell stress/strain/force energy diagnostics are intentionally not stored in the automatic buckling stage')
     with open(MODEL_NAME+'_build.json', 'w') as f:
@@ -944,7 +944,7 @@ def main(argv=None):
     settings['resource_plan'] = resource_plan
     settings['cpus_resolved'] = resource_plan['cpus']
     settings['gpus_resolved'] = resource_plan['gpus']
-    settings['effective_buckle_output'] = 'classification_only_U'
+    settings['effective_buckle_output'] = 'classification_only_U_UR'
     settings['automatic_shell_energy'] = False
     if args.check_inputs:
         print(json.dumps(dict(settings=settings, source_inputs=input_summary(inputs)), indent=2))
