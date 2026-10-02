@@ -21,6 +21,7 @@ import json
 import math
 import os
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
@@ -34,7 +35,7 @@ from abaqus_modal_archive import (extract_modal_archive, open_modal_archive,
                                   map_mode_to_reference,
                                   MechanicalClassificationUnavailable)
 from builtup_reference_section import build_reference_section
-from fcfsm_reference_basis import build_fcfsm_basis
+from fcfsm_reference_basis import build_fcfsm_basis, get_fcfsm_basis
 from abaqus_modal_harmonics import decompose_mode
 from assembly_projector import assembly_diagnostics, seam_relative_diagnostics
 from mechanical_modal_classifier import classify_modes_parallel, classify_eigenspace
@@ -566,20 +567,29 @@ def _automatic_mechanical_classification(archive_path, reference, geometric_rows
     apply_blas_thread_env(resource_plan['worker_layout'])
     tracker.start('BASIS')
     basis_cache={}
+    basis_cache_info={}
     workers=max(1,int(resource_plan['worker_layout']['processes']))
     def build_one(m):
-        return m,build_fcfsm_basis(reference,m,bc='S-S')
+        basis,status,path=get_fcfsm_basis(reference,m,bc='S-S')
+        return m,basis,status,path
     if workers == 1 or len(retained) == 1:
         for i,m in enumerate(retained,1):
-            unused,basis=build_one(m); basis_cache[m]=basis
-            tracker.update(done=i,total=len(retained),note='harmonic m=%d' % m)
+            unused,basis,status,path=build_one(m)
+            basis_cache[m]=basis
+            basis_cache_info[str(m)]=dict(status=status,path=path)
+            tracker.update(done=i,total=len(retained),
+                           note='harmonic m=%d cache=%s' % (m,status))
     else:
         with ThreadPoolExecutor(max_workers=min(workers,len(retained))) as pool:
             futures={pool.submit(build_one,m):m for m in retained}
             completed=0
             for future in as_completed(futures):
-                m,basis=future.result(); basis_cache[m]=basis; completed+=1
-                tracker.update(done=completed,total=len(retained),note='harmonic m=%d' % m)
+                m,basis,status,path=future.result()
+                basis_cache[m]=basis
+                basis_cache_info[str(m)]=dict(status=status,path=path)
+                completed+=1
+                tracker.update(done=completed,total=len(retained),
+                               note='harmonic m=%d cache=%s' % (m,status))
     tracker.finish('BASIS')
 
     settings=dict(
@@ -652,7 +662,9 @@ def _automatic_mechanical_classification(archive_path, reference, geometric_rows
         retained_harmonics=retained,
         harmonic_share_floor=share_floor,
         basis_hashes={str(m):basis_cache[m].definition_hash for m in retained},
+        basis_cache=basis_cache_info,
         resource_plan=resource_plan,
+        progress_timing=tracker.summary(),
         interpiece_interaction_status='UNAVAILABLE_NO_FORCE_RECOVERY')
     return mechanical_rows,clusters,basis_meta,resource_plan
 
@@ -711,12 +723,14 @@ def process(args):
             automatic_reference=canonical_reference_from_build(build)
             os.makedirs(args.output_dir,exist_ok=True)
             automatic_archive_path=os.path.join(args.output_dir,'modal_shapes_U_UR.npz')
+            archive_started=time.time()
             automatic_archive_summary=extract_modal_archive(
                 odb,
                 dict(step=metadata['step'],source_odb_sha256=odb_hash,
                      model_signature=signature,reference_hash=automatic_reference['definition_hash'],
                      extraction='single_pass_global_U_UR'),
                 automatic_archive_path)
+            automatic_archive_summary['elapsed_seconds']=time.time()-archive_started
         proxy = geo['projector']
         pieces = [t['instance'] for t in geo['tracks']]
         grid = visuals.common_grid(geo['tracks'], geo['tolerance'])
