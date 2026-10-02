@@ -274,6 +274,8 @@ def build_fcfsm_basis(reference, harmonic_n, bc='S-S'):
     metadata=dict(method='whole-built-up fcFSM force basis', harmonic_n=m, bc=str(bc).upper(),
                   reference_hash=reference['definition_hash'],
                   cross_gap_constraints='none', equilibrium_rows=['Fx','Fy','M'])
+    metadata['thickness_mm']=float(reference['material']['thickness_mm'])
     result=force_family_basis(k0,jgd,eq,definition_hash=key,metadata=metadata)
     result.equilibrium=eq
+    result.reference=reference
     return result
