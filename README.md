@@ -19,9 +19,41 @@ abaqus cae noGUI=abaqus_complete_model_m20.py -- ^
   --nodal-precision full ^
   --longitudinal-lines 2 ^
   --longitudinal-line-min-spacing-mm 5 ^
-  --modal-audit
+  --modal-audit ^
+  --parquet-export required
 ```
 
+
+## Compact Parquet review bundle
+
+For a full modal-audit run, the pipeline can also create a compact upload/review bundle so the full ODB normally does not need to be transferred.
+
+Install PyArrow once in the normal system Python before the Abaqus run:
+
+```bat
+python -m pip install pyarrow
+python -c "import pyarrow; print(pyarrow.__version__)"
+```
+
+Use `--parquet-export required` when the bundle is mandatory. The runtime is checked **before the expensive Abaqus solve**; if no usable Python/PyArrow runtime is found, the run stops early instead of discovering the problem after the solver finishes. The default policy is `auto`, which exports when PyArrow is available and otherwise keeps the normal Abaqus/audit outputs.
+
+The generated upload file is:
+
+```text
+<run>\modal_dsm_audit*\modal_analysis_parquet_bundle.zip
+```
+
+It contains compressed columnar files:
+
+- `modal_summary.parquet`: one row per eigenmode with eigenvalue/stress, L/D/G/O energy and vector shares, Assembly/seam diagnostics, cluster, flags and mechanical/geometric labels.
+- `harmonic_summary.parquet`: one row per mode and longitudinal harmonic with share, translation/rotation power and reconstruction residuals.
+- `peak_sections.parquet`: canonical cross-section `U + UR` at the peak station for every mode, including normalized shape coordinates for quick plotting.
+- `harmonic_sections.parquet`: per-node `U + UR` coefficients for significant harmonics; default minimum share is 0.001 (0.1%) and the dominant harmonic is always retained.
+- `clusters.parquet`: repeated/near-repeated eigenspace information and bounds.
+- `provenance.parquet`: model, basis, resource and classifier provenance.
+- `manifest.json`: row counts, compression, file sizes and SHA-256 hashes.
+
+The Parquet bundle is an analysis sidecar; the ODB remains the authoritative Abaqus result. For later review here, upload the ZIP bundle first. Only if a question cannot be resolved from it will the full ODB or another large file be needed.
 
 ## Mechanical Stage-A modal classification
 
