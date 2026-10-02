@@ -20,14 +20,19 @@ def _frame_mode(frame):
     em = _EIGEN.search(desc)
     if not mm or not em:
         return None
-    value = float(em.group(1).replace('D', 'E').replace('d', 'e'))
+    token=em.group(1).replace('D','E').replace('d','e')
+    value=float(token)
+    mantissa,sep,exponent_text=token.upper().partition('E')
+    decimals=len(mantissa.split('.',1)[1]) if '.' in mantissa else 0
+    exponent=int(exponent_text) if sep else 0
+    resolution=.5*10.**(exponent-decimals)
     try:
-        exact = float(frame.frameValue)
-        if math.isfinite(exact):
-            value = exact
-    except Exception:
+        exact=float(frame.frameValue)
+        if math.isfinite(exact) and abs(exact-value) <= 1.01*resolution:
+            value=exact
+    except (AttributeError,TypeError,ValueError):
         pass
-    return int(mm.group(1)), value
+    return int(mm.group(1)),value
 
 
 def _vector(value):
