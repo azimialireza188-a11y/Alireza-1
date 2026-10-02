@@ -1,4 +1,7 @@
+import os
+import tempfile
 import unittest
+from unittest import mock
 import numpy as np
 import builtup_reference_section as section
 import fcfsm_reference_basis as f
@@ -83,6 +86,30 @@ class FcFSMBasisTests(unittest.TestCase):
         b = f.basis_cache_key(changed['definition_hash'], 7, 'S-S')
         self.assertEqual(a, b)
         self.assertNotEqual(a, f.basis_cache_key(ref['definition_hash'], 8, 'S-S'))
+
+
+    def test_disk_cache_reuses_exact_physical_definition_hash(self):
+        ref=self.reference()
+        with tempfile.TemporaryDirectory() as folder:
+            first,status1,path1=f.get_fcfsm_basis(ref,3,'S-S',cache_dir=folder)
+            self.assertEqual(status1,'BUILT')
+            self.assertTrue(os.path.isfile(path1))
+            with mock.patch.object(f,'build_fcfsm_basis',
+                                   side_effect=AssertionError('cache miss rebuilt basis')):
+                second,status2,path2=f.get_fcfsm_basis(ref,3,'S-S',cache_dir=folder)
+            self.assertEqual(status2,'HIT')
+            self.assertEqual(path1,path2)
+            self.assertEqual(first.definition_hash,second.definition_hash)
+            np.testing.assert_allclose(first.K0,second.K0)
+            changed=dict(ref)
+            changed['definition_hash']='different-physical-hash'
+            with mock.patch.object(f,'build_fcfsm_basis',
+                                   wraps=f.build_fcfsm_basis) as rebuilt:
+                unused,status3,path3=f.get_fcfsm_basis(changed,3,'S-S',cache_dir=folder)
+            self.assertEqual(status3,'BUILT')
+            self.assertNotEqual(path1,path3)
+            rebuilt.assert_called_once()
+
 
 
 if __name__ == '__main__':
