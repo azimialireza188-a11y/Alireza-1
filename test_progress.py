@@ -80,5 +80,27 @@ class ProgressTests(unittest.TestCase):
 
 
 
+    def test_observer_receives_structured_monotonic_rows_without_parsing_stdout(self):
+        now=[0.0]
+        observed=[]
+        tracker=p.ProgressTracker(
+            ['extract','classify'],[1,1],emit=lambda unused:None,
+            observer=observed.append,clock=lambda:now[0])
+        tracker.start('extract')
+        now[0]=1.0
+        tracker.update(done=1,total=2,note='one of two')
+        now[0]=2.0
+        tracker.finish('extract')
+        tracker.start('classify')
+        now[0]=3.0
+        tracker.update(done=1,total=4)
+        overall=[row['overall_percent'] for row in observed]
+        self.assertTrue(all(b>=a for a,b in zip(overall,overall[1:])))
+        self.assertEqual(observed[1]['done'],1)
+        self.assertEqual(observed[1]['total'],2)
+        self.assertEqual(observed[1]['note'],'one of two')
+
+
+
 if __name__ == '__main__':
     unittest.main()
