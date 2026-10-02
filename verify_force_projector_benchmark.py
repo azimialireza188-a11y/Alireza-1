@@ -14,7 +14,10 @@ from abaqus_modal_validation import ForceProjector
 def verify(mat_path, output_path):
     data = loadmat(mat_path)
     result = ForceProjector(data['K'], data['J'], data['equilibrium']).project(data['U'])
-    report = {f+'_relative_vector_error': float(np.linalg.norm(result['components'][f]-data['P'+f])/
+    report = {'benchmark_schema_version': 1,
+              'algorithm_under_test': 'abaqus_modal_validation.ForceProjector',
+              'native_reference_kind': 'CUFSM fcFSM MAT export',
+              f+'_relative_vector_error': float(np.linalg.norm(result['components'][f]-data['P'+f])/
               np.linalg.norm(data['P'+f])) for f in ('L', 'D', 'G')}
     report['energy_closure_relative'] = result['cross_relative']
     report['maximum_native_reconstruction_error'] = float(np.linalg.norm(data['PL']+data['PD']+data['PG']-data['U'])/
@@ -23,6 +26,8 @@ def verify(mat_path, output_path):
     with open(report['source'], 'rb') as stream:
         report['native_source_sha256'] = hashlib.sha256(stream.read()).hexdigest()
     report['scope'] = 'Native CUFSM single-channel algorithm benchmark; NOT four-piece Abaqus physical validation'
+    report['external_runtime_required'] = True
+    report['synthetic_substitute_allowed'] = False
     report['passed'] = bool(max(report[f+'_relative_vector_error'] for f in ('L', 'D', 'G')) < 1e-7
                             and report['energy_closure_relative'] < 1e-10)
     with open(output_path, 'w') as stream: json.dump(report, stream, indent=2, allow_nan=False)
