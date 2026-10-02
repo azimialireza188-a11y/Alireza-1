@@ -9,6 +9,8 @@ from __future__ import print_function
 import hashlib
 import json
 import math
+import os
+import tempfile
 import numpy as np
 
 
@@ -285,3 +287,93 @@ def build_fcfsm_basis(reference, harmonic_n, bc='S-S'):
     result.equilibrium=eq
     result.reference=reference
     return result
+
+
+def default_basis_cache_dir():
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get('CFS_FCFSM_CACHE_DIR',
+                       os.path.join('~','.cfs_fcfsm_basis_cache','v1'))))
+
+
+def save_fcfsm_basis(path,basis):
+    """Persist one validated reference basis without pickled/object arrays."""
+    folder=os.path.dirname(os.path.abspath(path))
+    os.makedirs(folder,exist_ok=True)
+    metadata=dict(getattr(basis,'metadata',{}) or {})
+    metadata['definition_hash']=basis.definition_hash
+    equilibrium=np.asarray(getattr(basis,'equilibrium',np.empty((0,basis.J_GD.shape[1]))),dtype=float)
+    fd,tmp=tempfile.mkstemp(prefix='.basis_',suffix='.npz',dir=folder)
+    os.close(fd)
+    try:
+        np.savez(tmp,
+                 definition_hash=np.asarray(str(basis.definition_hash)),
+                 metadata=np.asarray(json.dumps(metadata,sort_keys=True)),
+                 K0=np.asarray(basis.K0,dtype=float),
+                 J_GD=np.asarray(basis.J_GD,dtype=float),
+                 J_D=np.asarray(basis.J_D,dtype=float),
+                 C_L=np.asarray(basis.C_L,dtype=float),
+                 C_D=np.asarray(basis.C_D,dtype=float),
+                 C_G=np.asarray(basis.C_G,dtype=float),
+                 equilibrium=equilibrium)
+        os.replace(tmp,path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return path
+
+
+def load_fcfsm_basis(path,expected_definition_hash=None):
+    with np.load(path,allow_pickle=False) as data:
+        required=('definition_hash','metadata','K0','J_GD','J_D','C_L','C_D','C_G')
+        missing=[name for name in required if name not in data]
+        if missing:
+            raise ValueError('Cached fcFSM basis missing: '+', '.join(missing))
+        definition_hash=str(data['definition_hash'].item())
+        if expected_definition_hash is not None and definition_hash!=str(expected_definition_hash):
+            raise ValueError('Cached fcFSM basis physical-definition hash mismatch')
+        metadata=json.loads(str(data['metadata'].item()))
+        if metadata.get('definition_hash')!=definition_hash:
+            raise ValueError('Cached fcFSM basis metadata hash mismatch')
+        k0=np.asarray(data['K0'],dtype=float)
+        solver=EnergeticSolver(k0)
+        basis=FamilyBasis(
+            k0,np.asarray(data['J_GD'],dtype=float),
+            np.asarray(data['J_D'],dtype=float),
+            np.asarray(data['C_L'],dtype=float),
+            np.asarray(data['C_D'],dtype=float),
+            np.asarray(data['C_G'],dtype=float),
+            solver,definition_hash=definition_hash,metadata=metadata)
+        if 'equilibrium' in data:
+            basis.equilibrium=np.asarray(data['equilibrium'],dtype=float)
+    return basis
+
+
+def get_fcfsm_basis(reference,harmonic_n,bc='S-S',cache_dir=None):
+    """Load/build a hash-keyed basis reusable across bolt-count cases."""
+    m=int(harmonic_n)
+    key=basis_cache_key(reference['definition_hash'],m,bc)
+    folder=default_basis_cache_dir() if cache_dir is None else os.path.abspath(os.path.expanduser(cache_dir))
+    os.makedirs(folder,exist_ok=True)
+    path=os.path.join(folder,key+'.npz')
+    if os.path.isfile(path):
+        try:
+            basis=load_fcfsm_basis(path,expected_definition_hash=key)
+            basis.reference=reference
+            basis.metadata['cache_status']='HIT'
+            basis.metadata['cache_path']=path
+            return basis,'HIT',path
+        except Exception:
+            # A corrupt/incomplete cache is never trusted. Rebuild from the
+            # current physical definition and atomically replace the entry.
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            rebuild_status='REBUILT_INVALID'
+    else:
+        rebuild_status='BUILT'
+    basis=build_fcfsm_basis(reference,m,bc)
+    basis.metadata['cache_status']=rebuild_status
+    basis.metadata['cache_path']=path
+    save_fcfsm_basis(path,basis)
+    return basis,rebuild_status,path
