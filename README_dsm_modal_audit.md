@@ -30,6 +30,48 @@ abaqus python abaqus_dsm_modal_audit.py --run-dir "مسیر نتایج مرحل�
 - `critical_stress_vs_half_wavelength.png/.pdf`: تنش بحرانی در برابر نیم‌طول‌موج غالب، با نقاط L/D/G/Mixed/Assembly و lower envelope مودهای Abaqus؛ مشابه نمودارهای مقایسه‌ای CUFSM ولی صریحاً برای نمونه‌های مودال طول ثابت.
 - `family_half_wavelength_envelopes.png/.pdf`: lower envelope جداگانهٔ خانواده‌های L/D/G. در صورت ارائهٔ `--curve-reference`، منحنی‌های مرجع CUFSM/GBT نیز روی هر دو نمودار رسم می‌شوند.
 
+
+## مسیر خودکار مکانیکی Stage A
+
+در ران جدیدی که ODB آن هر دو میدان `U` و `UR` را دارد، `--modal-audit` دیگر classifier هندسی را نتیجهٔ اصلی تلقی نمی‌کند. مسیر اصلی به‌ترتیب زیر است:
+
+1. `U/UR` فقط یک بار از ODB خوانده و در `modal_shapes_U_UR.npz` ذخیره می‌شود؛ پردازش عددی سنگین خارج از ODB reader انجام می‌شود.
+2. reference section چهارجزئی از `section_segments`، ضخامت، `E`، `nu` و طول ساخته می‌شود. بین قطعات مجزا هیچ cross-gap tie/stiffness ساخته نمی‌شود.
+3. میدان طولی به harmonicهای سازگار با S-S تجزیه می‌شود.
+4. برای هر harmonic، `K0/J_GD/J_D` و زیرفضاهای L/D/G برای **کل چهار قطعه با هم** ساخته می‌شوند.
+5. سهم اصلی با انرژی `K0` به‌صورت L/D/G/O محاسبه می‌شود؛ vector metric فقط cross-check است.
+6. `Assembly` و seam opening/transverse slip/longitudinal slip روی همان eigenmode اصلی و به‌صورت diagnostic مستقل گزارش می‌شوند.
+7. مقادیر ویژهٔ نزدیک به‌صورت eigenspace بررسی می‌شوند تا چرخش دلخواه بردارهای ویژه نتیجه را عوض نکند.
+8. geometric `SectionProjector` قدیمی فقط به‌صورت `geometric_screening_family` و `geometric_screening_percentages` کنار نتیجه باقی می‌ماند.
+
+بنابراین:
+
+```text
+L + D + G + O = 100%   (mechanical K0-energy decomposition)
+Assembly = diagnostic مستقل
+seam motion = diagnostic مستقل
+```
+
+و **Assembly به مجموع L/D/G/O اضافه نمی‌شود**.
+
+برای ODB قدیمی که فقط `U` دارد، برنامه صفر مصنوعی برای `UR` نمی‌سازد. نتیجه با وضعیت `MECHANICAL_CLASSIFICATION_UNAVAILABLE_MISSING_UR` فقط geometric screening خواهد بود.
+
+ستون‌های اصلی Stage A در `modal_percentages.csv` شامل `L/D/G/O_energy_percent`، سهم‌های vector cross-check، `assembly_percent`، سه seam index، `final_family`، `quality_state`، residualها، metric sensitivity و cluster id هستند. اگر force-resultant diagnostic بین قطعات هنوز از دادهٔ همان ران قابل بازیابی نباشد، مقدار آن unavailable باقی می‌ماند و **صفر فرض نمی‌شود**.
+
+### منابع سیستم و گزارش پیشرفت
+
+حالت پیش‌فرض تهاجمی است:
+
+- `--cpus auto`: همهٔ logical CPUهای شناسایی‌شده؛
+- `--gpus auto`: همهٔ GPUهای پشتیبانی‌شده، با CPU fallback صریح در صورت نبود backend معتبر؛
+- Abaqus memory request = 100%، بدون رزرو ثابت 24000 MB؛
+- کارهای مستقل mode/harmonic موازی می‌شوند و BLAS threads با worker count هماهنگ می‌شوند.
+
+مقدار صریح مانند `--cpus 8` همچنان override معتبر است.
+
+در زمان اجرا پیام `PROGRESS` مرحلهٔ جاری، درصد stage و overall، `done/total`، نرخ، elapsed، ETA و stageهای باقی‌مانده را نشان می‌دهد. درصد حل Abaqus در جایی که counter قابل اتکا وجود نداشته باشد با `ESTIMATED` مشخص می‌شود و پیش از تأیید completion هرگز 100% نمی‌شود.
+
+
 ## اصلاح مرز Local / Distortional در عضو built-up
 
 نسخهٔ فعلی Local را دیگر «باقی‌مانده بعد از Distortional» تعریف نمی‌کند. این تغییر به‌دلیل مشاهدهٔ مستقیم مودهایی مانند 120 mm و 300 mm انجام شد که خمیدگی واضح داخل wall داشتند ولی روش coarse-anchor بیش از 90٪ آن‌ها را D می‌خواند.
@@ -96,7 +138,8 @@ abaqus cae noGUI=abaqus_complete_model_m20.py -- ^
   --n-modes 250 ^
   --n-vectors 500 ^
   --max-iterations 1250 ^
-  --cpus 8 ^
+  --cpus auto ^
+  --gpus auto ^
   --nodal-precision full ^
   --modal-audit
 ```
@@ -114,7 +157,7 @@ abaqus cae noGUI=abaqus_complete_model_m20.py -- ^
 
 `--modal-audit` پس از گزارش‌های قبلی، ممیزی و گزارش گرافیکی را نیز می‌سازد. پوشهٔ موجود بازنویسی نمی‌شود؛ در تکرار، پسوند جدید ساخته می‌شود. همهٔ فایل‌های پایتون این پوشه، به‌ویژه `abaqus_modal_visuals.py`، باید کنار هم بمانند.
 
-در pipeline خودکار Buckle فقط میدان nodal `U` لازم برای شکل مود، طول‌موج و تفکیک L/D/G/A/O ذخیره می‌شود. خروجی‌های سنگین `S/E/SF/SE` و مرحلهٔ `SHELL ENERGY` از روند خودکار حذف شده‌اند، زیرا در classifier فعلی استفاده نمی‌شوند و فقط حجم ODB و زمان post-processing را افزایش می‌دادند. گزینهٔ قدیمی `--buckle-output detailed` برای سازگاری با دستورهای قبلی پذیرفته می‌شود، اما دیگر این میدان‌ها را فعال نمی‌کند.
+در pipeline خودکار Buckle فقط میدان‌های nodal `U + UR` لازم برای شکل مود، multi-harmonic mapping و classifier مکانیکی ذخیره می‌شوند. خروجی‌های سنگین `S/E/SF/SE` و مرحلهٔ `SHELL ENERGY` از روند خودکار حذف شده‌اند، زیرا در classifier فعلی استفاده نمی‌شوند و فقط حجم ODB و زمان post-processing را افزایش می‌دادند. گزینهٔ قدیمی `--buckle-output detailed` برای سازگاری با دستورهای قبلی پذیرفته می‌شود، اما دیگر این میدان‌ها را فعال نمی‌کند.
 
 پیش‌فرض جدید ذخیرهٔ خروجی گره‌ای `full` است. این تنظیم گردشدگی ذخیرهٔ U/UR را کاهش می‌دهد؛ دقت حل‌گر، مش و تعریف مکانیکی خانواده‌ها را افزایش نمی‌دهد و اطلاعات از دست‌رفتهٔ ODB قدیمی را بازیابی نمی‌کند. در اجرای مستقیم INP خارج از Job ساخته‌شده، این تنظیم مربوط به Job است و باید در دستور حل نیز `output_precision=full` بدهید.
 
@@ -130,9 +173,9 @@ abaqus python abaqus_complete_model_m20.py --resume-post "مسیر ران قبل
 
 گزارش انرژی پوسته دیگر بخشی از ران خودکار این مرحله نیست. کد مستقل `abaqus_modal_shell_energy.py` برای استفادهٔ پژوهشی/اختیاری باقی مانده است، اما فقط روی ODBای قابل اجراست که عمداً میدان‌های `S/E/SF/SE` را داشته باشد. این داده‌ها در تشخیص جاری L/D/G استفاده نمی‌شوند.
 
-**بدون `--basis`:** تفکیک هندسی curvature-aware استفاده می‌شود: Local از plate bending نرمال نسبت به moving chord physical wallها مستقیماً اندازه‌گیری می‌شود و Distortional فقط از coarse inextensional fold motion باقیمانده ساخته می‌شود. Assembly و Other جدا هستند. این مسیر همچنان غربالگری هندسی است و **هیچ Fcr خانواده‌ای را برای DSM تأیید نمی‌کند**.
+**بدون `--basis` در ODB جدید U+UR:** پایهٔ مکانیکی fcFSM-style به‌طور خودکار از canonical reference section ساخته می‌شود و K0-energy معیار اصلی است. classifier هندسی curvature-aware فقط screening موازی باقی می‌ماند. **در ODB قدیمی U-only** مسیر مکانیکی صریحاً unavailable می‌شود و همان screening هندسی به‌عنوان fallback گزارش می‌شود.
 
-**با `--basis`:** جابه‌جایی و دوران مود روی سه زیرفضای مکانیکیِ نگاشت‌شده برازش می‌شود. پایه باید از تحلیل cFSM/GBT یا روش مکانیکی مستند، سازگار با همین مقطع چهارجزئی و اتصال‌ها تهیه شده باشد. برنامه خودش چنین پایه‌ای را از هندسهٔ منحنی یا از برچسب‌های قبلی تولید نمی‌کند. استخراج پایه از CUFSM و انتقال آن به شبکهٔ Abaqus یک مرحلهٔ مستقل است؛ شکل آرایه‌های دو نرم‌افزار قابل جایگزینی مستقیم نیست.
+**با `--basis`:** مسیر legacy برای یک پایهٔ مکانیکیِ خارجیِ نگاشت‌شده همچنان حفظ شده است. این گزینه جای مسیر خودکار جدید را نمی‌گیرد و برای benchmark/مطالعات ویژه‌ای است که basis مستقل مستند دارند.
 
 برازش به صورت هم‌زمان انجام می‌شود؛ ترتیب L/D/G سهم‌ها را عوض نمی‌کند. هم‌پوشانی یا بدشرطی شدید پایه‌ها رد می‌شود. درصد جابه‌جایی تعریف زیر را دارد:
 
