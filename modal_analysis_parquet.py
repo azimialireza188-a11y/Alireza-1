@@ -452,9 +452,12 @@ def export_run(run_dir,audit_dir=None,output_root=None,
 
 def parse_arguments(argv=None):
     parser=argparse.ArgumentParser(description='Export compact Parquet modal-analysis bundle')
-    parser.add_argument('--run-dir',required=True)
+    parser.add_argument('--run-dir')
     parser.add_argument('--audit-dir')
     parser.add_argument('--output-root')
+    parser.add_argument('--refresh-pipeline-only',action='store_true')
+    parser.add_argument('--bundle-dir')
+    parser.add_argument('--pipeline-report')
     parser.add_argument('--harmonic-section-min-share',type=float,default=.001,
                         help='Minimum harmonic share stored with per-node coefficients; dominant harmonic is always stored')
     parser.add_argument('--probe',action='store_true',help='Only report whether PyArrow is available')
@@ -467,8 +470,15 @@ def main(argv=None):
         result=runtime_probe()
         print(json.dumps(result,sort_keys=True))
         return 0 if result['available'] else 2
-    result=export_run(args.run_dir,args.audit_dir,args.output_root,
-                      args.harmonic_section_min_share)
+    if args.refresh_pipeline_only:
+        if not args.bundle_dir or not args.pipeline_report:
+            raise SystemExit('--refresh-pipeline-only requires --bundle-dir and --pipeline-report')
+        result=refresh_pipeline_tables(args.bundle_dir,args.pipeline_report)
+    else:
+        if not args.run_dir:
+            raise SystemExit('--run-dir is required for a full Parquet export')
+        result=export_run(args.run_dir,args.audit_dir,args.output_root,
+                          args.harmonic_section_min_share)
     print(json.dumps(result,indent=2,sort_keys=True))
     return 0
 
