@@ -13,4 +13,4 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --upgrade pip
       - run: python -m pip install numpy scipy matplotlib
-      - run: python -m unittest test_progress.py test_resource_policy.py test_complete_pipeline.py -v
+      - run: python -m unittest test_progress.py test_resource_policy.py test_modal_archive.py test_complete_pipeline.py -v
