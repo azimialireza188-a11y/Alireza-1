@@ -1,0 +1,139 @@
+# -*- coding: utf-8 -*-
+"""Canonical, bolt-independent four-piece reference-section geometry."""
+from __future__ import print_function
+import hashlib
+import json
+import math
+import numpy as np
+from abaqus_physical_walls import physical_wall_layout
+
+
+def _points_from_segments(segments):
+    rows = [tuple(float(v) for v in row[:4]) for row in segments]
+    if not rows:
+        raise ValueError('Each piece needs at least one segment')
+    points = [rows[0][:2]]
+    for i, row in enumerate(rows):
+        if i and math.hypot(points[-1][0]-row[0], points[-1][1]-row[1]) > 1e-6:
+            raise ValueError('Disconnected piece source polyline')
+        if math.hypot(row[2]-row[0], row[3]-row[1]) <= 1e-12:
+            raise ValueError('Zero-length reference segment')
+        points.append(row[2:4])
+    a = tuple(round(x, 12) for p in points for x in p)
+    bpoints = list(reversed(points))
+    b = tuple(round(x, 12) for p in bpoints for x in p)
+    return bpoints if b < a else points
+
+
+def _canonical_piece_records(section_segments):
+    records = []
+    for original, segments in section_segments.items():
+        points = _points_from_segments(segments)
+        xy = np.asarray(points, dtype=float)
+        centroid = np.mean(xy, axis=0)
+        angle = math.atan2(float(centroid[1]), float(centroid[0]))
+        if angle < 0:
+            angle += 2*math.pi
+        records.append(dict(original=str(original), points=points,
+                            sort_key=(round(angle, 12), round(float(np.linalg.norm(centroid)), 12),
+                                      tuple(round(x, 9) for p in points for x in p))))
+    records.sort(key=lambda r: r['sort_key'])
+    for i, record in enumerate(records, 1):
+        record['piece'] = 'C%d' % i
+    return records
+
+
+def _hash_payload(records, thickness_mm, E_MPa, nu, length_mm):
+    payload = dict(
+        version='builtup_reference_v1',
+        pieces=[[[round(float(x), 12) for x in p] for p in r['points']] for r in records],
+        thickness_mm=round(float(thickness_mm), 12),
+        E_MPa=round(float(E_MPa), 8),
+        nu=round(float(nu), 12),
+        length_mm=round(float(length_mm), 8),
+        cross_gap_constraints='none')
+    text = json.dumps(payload, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(text.encode('utf-8')).hexdigest(), payload
+
+
+def build_reference_section(section_segments, thickness_mm, E_MPa, nu, length_mm,
+                            seams=None, connection_metadata=None):
+    if len(section_segments) != 4:
+        raise ValueError('Whole built-up reference requires exactly four physical pieces')
+    for name, value in (('thickness_mm', thickness_mm), ('E_MPa', E_MPa),
+                        ('length_mm', length_mm)):
+        if not math.isfinite(float(value)) or float(value) <= 0:
+            raise ValueError('%s must be positive and finite' % name)
+    if not math.isfinite(float(nu)) or not -1.0 < float(nu) < .5:
+        raise ValueError('nu must be finite and physically admissible')
+
+    records = _canonical_piece_records(section_segments)
+    definition_hash, payload = _hash_payload(records, thickness_mm, E_MPa, nu, length_mm)
+    nodes, elements, plate_groups, corner_ids = [], [], [], set()
+    original_to_canonical = {}
+    node_id = 1
+    element_id = 1
+    piece_info = []
+
+    for record in records:
+        piece = record['piece']
+        original_to_canonical[record['original']] = piece
+        points = np.asarray(record['points'], dtype=float)
+        local_node_ids = []
+        for x, y in points:
+            local_node_ids.append(node_id)
+            nodes.append(dict(id=node_id, piece=piece, x=float(x), y=float(y)))
+            node_id += 1
+        layout = physical_wall_layout(points)
+        local_element_ids = []
+        for i in range(len(points)-1):
+            eid = element_id
+            local_element_ids.append(eid)
+            elements.append(dict(id=eid, piece=piece, n1=local_node_ids[i],
+                                 n2=local_node_ids[i+1],
+                                 length_mm=float(np.linalg.norm(points[i+1]-points[i])),
+                                 thickness_mm=float(thickness_mm), corner=False))
+            element_id += 1
+        for lo, hi in layout['bends']:
+            for i in range(int(lo), int(hi)):
+                if 0 <= i < len(local_element_ids):
+                    corner_ids.add(local_element_ids[i])
+        for start, end in layout['walls']:
+            ids = local_element_ids[int(start):int(end)]
+            if ids:
+                plate_groups.append(dict(piece=piece, element_ids=list(ids)))
+        piece_info.append(dict(name=piece, original_name=record['original'],
+                               node_ids=local_node_ids, element_ids=local_element_ids,
+                               points=points.tolist()))
+
+    for element in elements:
+        if element['id'] in corner_ids:
+            element['corner'] = True
+
+    seam_pairs = []
+    for row in seams or []:
+        if len(row) < 7:
+            raise ValueError('Seam rows require id,pieceA,pieceB,xA,yA,xB,yB')
+        sid, pa, pb, xa, ya, xb, yb = row[:7]
+        pa_key, pb_key = str(int(pa)) if float(pa).is_integer() else str(pa), str(int(pb)) if float(pb).is_integer() else str(pb)
+        # Match common P1-style source names as well as raw numeric keys.
+        ca = original_to_canonical.get(pa_key, original_to_canonical.get('P'+pa_key))
+        cb = original_to_canonical.get(pb_key, original_to_canonical.get('P'+pb_key))
+        seam_pairs.append(dict(id=int(sid), piece_a=ca, piece_b=cb,
+                               point_a=[float(xa), float(ya)], point_b=[float(xb), float(yb)]))
+
+    return dict(
+        version='builtup_reference_v1',
+        pieces=piece_info,
+        nodes=nodes,
+        elements=elements,
+        plate_groups=plate_groups,
+        corner_elements=sorted(corner_ids),
+        seam_pairs=seam_pairs,
+        material=dict(thickness_mm=float(thickness_mm), E_MPa=float(E_MPa), nu=float(nu)),
+        length_mm=float(length_mm),
+        definition_hash=definition_hash,
+        definition_payload=payload,
+        connection_metadata=dict(connection_metadata or {}),
+        cross_gap_constraints=[],
+        original_to_canonical=original_to_canonical)
