@@ -21,6 +21,10 @@ General contact covers all exterior shell surfaces, including self-contact:
 hard normal contact, frictionless tangential behavior, separation allowed.
 Buckle freezes contact at the base state; it cannot enforce new contact in
 scaled eigenmode plots. Finite-deformation contact requires nonlinear analysis.
+Use --longitudinal-lines 0 for the original simplification (default), 2..99
+for up to that many internal lines per curved region, or 100 for all source
+lines. Essential boundaries and bolt lines always remain. Lines are selected
+from the original section; no coordinates or radii are changed.
 Set --check-inputs to validate the CSV data without starting Abaqus/CAE.
 """
 import csv
@@ -48,12 +52,17 @@ MESH_MM = 20.0        # target element size (mm), both section and length; e.g. 
 N_MODES = 20          # number of requested buckling modes; e.g. 5, 10, 30 or 50
 N_VECTORS = 60       # vectors used per SUBSPACE iteration
 MAX_ITERATIONS = 300  # iteration limit for SUBSPACE, separate from mode count
+LONGITUDINAL_LINES = 0  # 0: original; 2..99: per curve; 100: all source lines
 # Changing settings requires rebuilding the CAE/INP with this script.
 # A finer mesh increases model size; exact bolt locations may require shorter edges.
 # ====================================================================
 
 
 def validate_settings():
+    if (isinstance(LONGITUDINAL_LINES, bool) or
+            not isinstance(LONGITUDINAL_LINES, int) or
+            LONGITUDINAL_LINES not in [0] + list(range(2, 101))):
+        raise ValueError('LONGITUDINAL_LINES must be 0 or an integer from 2 to 100')
     if (isinstance(MESH_MM, bool) or not isinstance(MESH_MM, (int, float)) or
             not MESH_MM > 0 or math.isinf(MESH_MM)):
         raise ValueError('MESH_MM must be a positive finite number in mm')
@@ -86,6 +95,9 @@ def parse_arguments(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--builtup-dir', default=BUILTUP_DIR, help='Source CUFSM CSV directory')
     parser.add_argument('--mesh-mm', type=float, default=MESH_MM)
+    parser.add_argument('--longitudinal-lines', type=int, default=LONGITUDINAL_LINES,
+        help='0: original simplification; 2..99: internal lines per curved region; '
+             '100: retain all source lines (essential and bolt lines always remain)')
     parser.add_argument('--n-modes', type=int, default=N_MODES)
     parser.add_argument('--n-vectors', type=int, default=None)
     parser.add_argument('--max-iterations', type=int, default=MAX_ITERATIONS)
@@ -105,6 +117,8 @@ def parse_arguments(argv=None):
     parser.add_argument('--resume-post', metavar='RUN_DIR',
                         help='Verify completed run and postprocess its ODB; never build or submit')
     args = parser.parse_args(argv)
+    if args.longitudinal_lines not in [0] + list(range(2, 101)):
+        parser.error('--longitudinal-lines must be 0 or an integer from 2 to 100')
     if args.modal_audit and args.skip_post:
         parser.error('--modal-audit requires postprocessing; remove --skip-post')
     if args.resume_post and (args.build_only or args.skip_post or args.check_inputs or args.output_dir or args.output_root):
@@ -313,6 +327,60 @@ def xykey(point):
     return (round(point[0], 6), round(point[1], 6))
 
 
+def select_longitudinal_lines(segments, legacy_keep, count):
+    """Keep source vertices, with nested refinement weighted by turning angle.
+
+    A curved region is a consecutive run of nonzero turns of the same sign;
+    flats and inflections separate regions. Its end boundaries and all legacy
+    boundaries are mandatory. Interior mandatory lines count towards the budget
+    but are never removed, even when they already exceed it. A single sharp
+    corner remains a boundary. 100 includes collinear source subdivisions too.
+    """
+    keep = set(legacy_keep)
+    if count == 0:
+        return keep
+    points = [segments[0][:2]] + [s[2:] for s in segments]
+    keys = [xykey(p) for p in points]
+    if count == 100:
+        return keep | set(keys)
+    keep.update((keys[0], keys[-1]))
+    turns = [0.0] * len(points)
+    regions = []
+    for i in range(1, len(points)-1):
+        ux, uy = points[i][0]-points[i-1][0], points[i][1]-points[i-1][1]
+        vx, vy = points[i+1][0]-points[i][0], points[i+1][1]-points[i][1]
+        turns[i] = math.atan2(ux*vy-uy*vx, ux*vx+uy*vy)
+        # Ignore round-off in exported collinear coordinates (0.001 degrees).
+        if abs(turns[i]) <= math.radians(0.001):
+            continue
+        if (not regions or regions[-1][-1] != i-1 or
+                turns[regions[-1][-1]] * turns[i] < 0):
+            regions.append([])
+        regions[-1].append(i)
+    for region in regions:
+        if region[0] == 1:
+            region = [0] + region
+        if region[-1] == len(points)-2:
+            region = region + [len(points)-1]
+        first, last = region[0], region[-1]
+        keep.update((keys[first], keys[last]))
+        interior = region[1:-1]
+        selected = [i for i in interior if keys[i] in keep]
+        # Cumulative turning, rather than distance, concentrates lines at bends.
+        position = {first: 0.0}
+        for i in region[1:]:
+            position[i] = position[i-1] + (abs(turns[i-1])+abs(turns[i]))/2.0
+        candidates = [i for i in interior if keys[i] not in keep]
+        while candidates and len(selected) < count:
+            anchors = [first, last] + selected
+            chosen = max(candidates, key=lambda i: (
+                min(abs(position[i]-position[j]) for j in anchors), -i))
+            keep.add(keys[chosen])
+            selected.append(chosen)
+            candidates.remove(chosen)
+    return keep
+
+
 def read_geometry(folder):
     """Read original section coordinates without loading the analysis script."""
     pieces = {}
@@ -502,6 +570,29 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         part.PartitionFaceByDatumPlane(datumPlane=part.datums[plane.id], faces=face)
         keep.add(xykey((x, y)))
 
+    keep = select_longitudinal_lines(pieces[1], keep, LONGITUDINAL_LINES)
+    if LONGITUDINAL_LINES == 100:
+        # Extrusion merges collinear sketch segments into a single face, but
+        # can leave their end vertices. Restore the missing lengthwise cuts
+        # so maximum detail also has four-sided, structured-meshable faces.
+        native_lines = set()
+        for edge in part.edges:
+            vertices = edge.getVertices()
+            if len(vertices) == 2:
+                a, b = [part.vertices[i].pointOn[0] for i in vertices]
+                if xykey(a) == xykey(b):
+                    native_lines.add(xykey(a))
+        for x, y, x2, y2 in pieces[1][1:]:
+            if xykey((x, y)) in native_lines:
+                continue
+            face = part.faces.findAt(((x, y, LENGTH_MM / 2),))
+            use_x = abs(x2-x) >= abs(y2-y)
+            plane = part.DatumPlaneByPrincipalPlane(
+                principalPlane=YZPLANE if use_x else XZPLANE,
+                offset=x if use_x else y)
+            part.PartitionFaceByDatumPlane(datumPlane=part.datums[plane.id], faces=face)
+            native_lines.add(xykey((x, y)))
+
     cuts = sorted(set(round(z, 7) for z in bolts + [LENGTH_MM / 2]))
     for z in cuts:
         plane = part.DatumPlaneByPrincipalPlane(principalPlane=XYPLANE, offset=z)
@@ -521,8 +612,9 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         if xykey(a) == xykey(b) and xykey(a) not in keep:
             ignored_edges.append(edge)
             ignored_vertices.update(vertices)
-    part.ignoreEntity(entities=tuple(ignored_edges) +
-                      tuple(part.vertices[i] for i in sorted(ignored_vertices)))
+    if ignored_edges or ignored_vertices:
+        part.ignoreEntity(entities=tuple(ignored_edges) +
+                          tuple(part.vertices[i] for i in sorted(ignored_vertices)))
     # Native extrusion can leave extra collinear end vertices with no internal
     # longitudinal edge. Remove these too, leaving four-sided virtual regions.
     redundant = tuple(v for v in part.vertices
@@ -618,6 +710,7 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         viewport.view.fitView()
     mdb.saveAs(pathName=os.path.join(os.getcwd(), MODEL_NAME+'.cae'))
     report = dict(length_mm=LENGTH_MM, target_mesh_mm=MESH_MM, modes=N_MODES,
+        longitudinal_lines=LONGITUDINAL_LINES, retained_section_lines=len(keep),
         vectors=N_VECTORS, max_iterations=MAX_ITERATIONS, cpus=cpus,
         job_name=MODEL_NAME, odb=os.path.abspath(MODEL_NAME+'.odb'),
         nodes=4*len(part.nodes), elements=4*len(part.elements), element_type='S4R',
@@ -644,10 +737,12 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
 
 def main(argv=None):
     global BUILTUP_DIR, MESH_MM, N_MODES, N_VECTORS, MAX_ITERATIONS
+    global LONGITUDINAL_LINES
     args = parse_arguments(argv)
     if args.resume_post:
         return resume_postprocessing(args.resume_post, modal_audit=args.modal_audit)
     BUILTUP_DIR, MESH_MM = args.builtup_dir, args.mesh_mm
+    LONGITUDINAL_LINES = args.longitudinal_lines
     N_MODES, N_VECTORS, MAX_ITERATIONS = args.n_modes, args.n_vectors, args.max_iterations
     validate_settings()
     inputs = read_model_inputs(BUILTUP_DIR)

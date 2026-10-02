@@ -575,7 +575,7 @@ def write_cluster_report(output_dir, summary):
          'YES' if r.get('spectrum_boundary') else 'no',
          html.escape('; '.join(s for s in (
              'unresolved neighboring spectral gap' if r.get('spectral_isolation', {}).get('unresolved_neighbor') else '',
-             'panel-angle sensitive' if r.get('angle_sensitive') else '', r.get('bound_error') or '',
+             'wall-definition sensitive' if r.get('angle_sensitive') else '', r.get('bound_error') or '',
              'residual limit exceeded' if r['bounds'].get('maximum_relative_residual', 0) > summary['settings']['max_residual'] else '') if s))) for r in usable)
     text = '''<!doctype html><meta charset="utf-8"><title>Eigenspace validation</title>
 <style>body{font:16px/1.6 system-ui;max-width:1250px;margin:30px auto;padding:20px;background:#101b2c;color:#e8eef8}img{width:100%}td,th{padding:8px;border-bottom:1px solid #435169;text-align:left}a{color:#83c9ff}table{width:100%}</style>

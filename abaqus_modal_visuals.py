@@ -64,6 +64,7 @@ def rigid_shares(vector, projector, qrelative=None):
         distortional_within_ldg_percent=d['distortional_percent'],
         assembly_percent=d['assembly_percent'], other_percent=d.get('other_percent', 0.),
         wall_curvature_index=d.get('wall_curvature_index'),
+        component_norm_sum_over_input=d['component_norm_sum_over_input'],
         reconstruction_relative_error=d['reconstruction_relative_error'])
 
 
@@ -242,8 +243,9 @@ def write_visuals(output_dir, summary, previews, geometry, spectra):
         ylabel='Critical stress (MPa)' if summary['sigma_ref_MPa'] else 'Eigenvalue multiplier',
         title='Fixed-length modal samples, not a classical signature curve'); axes[0, 1].legend(fontsize=8)
     axes[1, 0].plot(x, [100*r['spectral_fit_error'] for r in rows], color='#b65157', label='Sine fit error (%)')
-    axes[1, 0].plot(x, [(r.get('sensitivity') or {}).get('max_range_pp', np.nan) for r in rows], color='#9470c2', label='Panel-angle sensitivity (pp)')
-    axes[1, 0].plot(x, [r.get('raw_vs_fitted_max_pp', np.nan) for r in rows], color='#267e98', label='Raw vs fitted shares (pp)')
+    axes[1, 0].plot(x, [(r.get('sensitivity') or {}).get('max_range_pp', np.nan) for r in rows], color='#9470c2', label='Wall-definition sensitivity (pp)')
+    if any(r.get('raw_vs_fitted_max_pp') is not None for r in rows):
+        axes[1, 0].plot(x, [r.get('raw_vs_fitted_max_pp', np.nan) for r in rows], color='#267e98', label='Raw vs fitted shares (pp)')
     axes[1, 0].plot(x, [(r.get('rigid_diagnostics') or {}).get('assembly_percent', np.nan) for r in rows],
                     color='#b060c8', alpha=.75, label='Assembly share (%)')
     axes[1, 0].plot(x, [(r.get('rigid_diagnostics') or {}).get('other_percent', np.nan) for r in rows],

@@ -22,6 +22,12 @@ import numpy as np
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(
     globals().get('__file__', sys._getframe().f_code.co_filename)))
+_walls_spec = importlib.util.spec_from_file_location(
+    'pipeline_physical_walls', os.path.join(SCRIPT_DIR, 'abaqus_physical_walls.py'))
+_walls_module = importlib.util.module_from_spec(_walls_spec)
+_walls_spec.loader.exec_module(_walls_module)
+physical_wall_layout = _walls_module.physical_wall_layout
+wall_kinematics = _walls_module.wall_kinematics
 COLORS = {'Global-like': '#2369b0', 'Distortional-like': '#e58a16',
           'Local-like': '#29946b', 'Assembly-like': '#b060c8', 'Other-like': '#9b6b43',
           'Mixed': '#8b58a0', 'Unresolved': '#777777'}
@@ -31,7 +37,9 @@ LIMITATION = ('Geometric displacement classification only; not cFSM/GBT or strai
     'Assembly-like component and is excluded from the L/D/G denominator. Anchor motion that '
     'changes panel chord length is reported as Other-like transverse extension and is also '
     'excluded. Local plate bending is measured first from normal displacement relative '
-    'to moving physical-wall chords. Distortional proxy is then driven only by the remaining '
+    'to endpoint-driven wall motion that reproduces rigid rotation of initially curved walls. '
+    'Compact source bends delimit walls; smooth wall curvature remains inside each wall. '
+    'Distortional proxy is then driven only by the remaining '
     'inextensional fold/coarse motion. The wall geometry comes from '
     'builtup_segments.csv when available. Older runs without persisted wall geometry use a mesh fallback and are '
     'flagged accordingly. Inspect the displayed shapes.')
@@ -52,11 +60,11 @@ class SectionProjector:
     """Curvature-aware geometric screening split for built-up open sections.
 
     The key rule is that Local is measured first from bending of a physical
-    wall relative to the moving chord joining its two fold lines. Therefore a
+    wall relative to endpoint-driven motion of its curved reference. Therefore a
     local plate buckle cannot be consumed by a coarse Distortional
     interpolation merely because the corner/fold nodes also move.
 
-      L: normal within-wall bending relative to moving wall chords,
+      L: normal within-wall bending after rigid-exact endpoint interpolation,
       G: whole-section rigid motion of physical fold lines,
       A: independent rigid motion of built-up pieces after G,
       O: first-order wall-chord extension/shear-like fold motion,
@@ -68,7 +76,7 @@ class SectionProjector:
     """
 
     def __init__(self, xy, edges, pieces, weights, corner_angle=15.,
-                 physical_segments=None, wall_angle_deg=3.0):
+                 physical_segments=None, wall_angle_deg=3.0, bend_radius_fraction=.04):
         self.xy = np.asarray(xy, dtype=float)
         self.weights = np.asarray(weights, dtype=float)
         self.pieces = np.asarray(pieces)
@@ -125,6 +133,8 @@ class SectionProjector:
         typical_edge=float(np.median(edge_lengths)) if edge_lengths else 1.
 
         walls=[]
+        bend_zones=[]
+        source_wall_layouts={}
         source='mesh_straight_runs'
         if physical_segments:
             source='builtup_segments.csv'
@@ -135,30 +145,25 @@ class SectionProjector:
                 segs=[np.asarray(row,float) for row in segments]
                 if not segs:
                     continue
-                runs=[]; current=[segs[0]]
-                reference=segs[0][2:4]-segs[0][0:2]
-                for seg in segs[1:]:
-                    vb=seg[2:4]-seg[0:2]
-                    # Compare to the run's reference direction, not only the
-                    # immediately previous segment. Otherwise a finely
-                    # discretized radius can accumulate large curvature while
-                    # every incremental turn stays below the tolerance.
-                    if angle_between(reference,vb)<=wall_angle_deg:
-                        current.append(seg)
-                    else:
-                        runs.append(current); current=[seg]; reference=vb
-                runs.append(current)
-                total=sum(float(np.linalg.norm(x[2:4]-x[0:2])) for x in segs)
-                min_len=max(3.*typical_edge, .04*total)
-                for run in runs:
-                    length=sum(float(np.linalg.norm(x[2:4]-x[0:2])) for x in run)
-                    if length < min_len:
-                        continue
-                    p0,p1=run[0][0:2],run[-1][2:4]
-                    a0,a1=nearest_piece_node(name,p0),nearest_piece_node(name,p1)
+                points=np.vstack([segs[0][0:2]]+[seg[2:4] for seg in segs])
+                layout=physical_wall_layout(points, radius_fraction=bend_radius_fraction)
+                source_wall_layouts[name]=dict(
+                    walls=[dict(start_source=a,end_source=b,start_xy=points[a].tolist(),
+                                end_xy=points[b].tolist(),length_mm=float(layout['arclength'][b]-layout['arclength'][a]))
+                           for a,b in layout['walls']],
+                    curvature_threshold_per_mm=layout['curvature_threshold_per_mm'])
+                bend_zones.extend(dict(piece=name,start_xy=points[a].tolist(),end_xy=points[b].tolist(),
+                                       length_mm=float(layout['arclength'][b]-layout['arclength'][a]))
+                                  for a,b in layout['bends'])
+                for a,b in layout['walls']:
+                    a0,a1=nearest_piece_node(name,points[a]),nearest_piece_node(name,points[b])
                     path=path_between(chains[name],a0,a1)
                     if len(path)>=3:
-                        walls.append(dict(piece=name,path=path,source_length=length))
+                        walls.append(dict(piece=name,path=path,
+                            source_length=float(layout['arclength'][b]-layout['arclength'][a]),
+                            mapping_error_mm=max(float(np.linalg.norm(self.xy[a0]-points[a])),
+                                                 float(np.linalg.norm(self.xy[a1]-points[b])))))
+
         else:
             for name,chain in chains.items():
                 if len(chain)<3:
@@ -187,8 +192,9 @@ class SectionProjector:
             clen=np.linalg.norm(chord)
             if clen<=1e-30:
                 continue
-            deviation=np.abs(np.cross(self.xy[path]-self.xy[path[0]],chord))/clen
-            if np.max(deviation)>max(.02*clen,.25*typical_edge):
+            delta=self.xy[path]-self.xy[path[0]]
+            deviation=np.abs(delta[:,0]*chord[1]-delta[:,1]*chord[0])/clen
+            if not physical_segments and np.max(deviation)>max(.02*clen,.25*typical_edge):
                 continue
             seen.add(key); unique.append(wall)
         walls=unique
@@ -208,29 +214,25 @@ class SectionProjector:
         for wall in walls:
             path=wall['path']
             pts=self.xy[path]
-            dist=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(pts,axis=0),axis=1))]
-            length=max(float(dist[-1]),1e-30); wall_lengths.append(length)
-            chord=pts[-1]-pts[0]; tangent=chord/max(np.linalg.norm(chord),1e-30)
-            normal=np.array([-tangent[1],tangent[0]])
-            nn=np.outer(normal,normal)
-            for node,t in zip(path[1:-1],dist[1:-1]/length):
+            aa,bb,normals,dist=wall_kinematics(pts)
+            length=float(dist[-1]); wall_lengths.append(length)
+            scalar=np.zeros((len(path),ndof))
+            for j,node in enumerate(path[1:-1],1):
                 if node in local_rows:
                     continue
-                # Only displacement normal to the wall chord is Local plate
-                # bending. Tangential/nonlinear residuals are retained for the
-                # non-DSM Other component.
-                rows=slice(2*node,2*node+2)
-                pwall[rows,2*node:2*node+2]+=nn
-                pwall[rows,2*path[0]:2*path[0]+2]-=(1.-t)*nn
-                pwall[rows,2*path[-1]:2*path[-1]+2]-=t*nn
+                normal=normals[j]
+                scalar[j,2*node:2*node+2]=normal
+                scalar[j,2*path[0]:2*path[0]+2]-=normal@aa[j]
+                scalar[j,2*path[-1]:2*path[-1]+2]-=normal@bb[j]
+                pwall[2*node:2*node+2,:]=normal[:,None]*scalar[j]
                 local_rows.add(node)
+            # Curvature of the rigid-corrected normal residual, not of the
+            # displacement of the undeformed curved reference shape.
             for j in range(1,len(path)-1):
-                h0=max(dist[j]-dist[j-1],1e-30); h1=max(dist[j+1]-dist[j],1e-30)
-                coeff=[2./(h0*(h0+h1)),-2./(h0*h1),2./(h1*(h0+h1))]
-                row=np.zeros(ndof)
-                for node,c in zip(path[j-1:j+2],coeff):
-                    row[2*node:2*node+2]+=c*normal
-                wall_curvature_rows.append(row*length*length)
+                h0=dist[j]-dist[j-1]; h1=dist[j+1]-dist[j]
+                coeff=np.array([2./(h0*(h0+h1)),-2./(h0*h1),2./(h1*(h0+h1))])
+                row=coeff@scalar[j-1:j+2]
+                wall_curvature_rows.append(row*length*length*np.sqrt((h0+h1)/(2.*length)))
         self.pwalllocal=pwall
         self.curvature_matrix=np.vstack(wall_curvature_rows) if wall_curvature_rows else np.zeros((0,ndof))
 
@@ -278,20 +280,19 @@ class SectionProjector:
         for k,node in enumerate(fold_nodes):
             gather[2*k,2*node]=1.; gather[2*k+1,2*node+1]=1.
 
-        shape=np.zeros((count,len(fold_nodes)))
+        interpolation=np.zeros((ndof,2*len(fold_nodes)))
         for node,k in fold_ids.items():
-            shape[node,k]=1.
+            interpolation[2*node:2*node+2,2*k:2*k+2]=np.eye(2)
         for name,chain in chains.items():
-            marks=[(chain.index(n),n) for n in fold_nodes if n in chain]
-            marks.sort()
+            marks=sorted((chain.index(n),n) for n in fold_nodes if n in chain)
             for (_,aa),(_,bb) in zip(marks,marks[1:]):
                 path=path_between(chain,aa,bb)
                 if len(path)<2:
                     continue
-                d=np.r_[0.,np.cumsum(np.linalg.norm(np.diff(self.xy[path],axis=0),axis=1))]
-                t=d/max(float(d[-1]),1e-30)
-                shape[path,fold_ids[aa]]=1.-t; shape[path,fold_ids[bb]]=t
-        interpolation=np.kron(shape,np.eye(2))@gather if fold_nodes else np.zeros((ndof,ndof))
+                left,right,unused_normal,unused_dist=wall_kinematics(self.xy[path])
+                for j,node in enumerate(path):
+                    interpolation[2*node:2*node+2,2*fold_ids[aa]:2*fold_ids[aa]+2]=left[j]
+                    interpolation[2*node:2*node+2,2*fold_ids[bb]:2*fold_ids[bb]+2]=right[j]
 
         constraints=[]
         for wall in walls:
@@ -336,6 +337,10 @@ class SectionProjector:
                             piece_ranks_ok and all(chains.values()) and len(local_rows)>0)
         self.flat_fraction=float(sum(wall_lengths)/max(perimeter,1e-30))
         self.metadata=dict(
+            wall_method="compact_source_bends_rigid_exact_v2" if physical_segments else "mesh_straight_runs",
+            bend_radius_fraction=bend_radius_fraction, bend_zones=bend_zones,
+            source_wall_layouts=source_wall_layouts,
+            maximum_wall_mapping_error_mm=max([w.get("mapping_error_mm",0.) for w in walls] or [0.]),
             fold_nodes=fold_nodes, physical_wall_count=len(walls),
             physical_walls=[dict(piece=w['piece'],start=w['path'][0],end=w['path'][-1],
                                  node_count=len(w['path']),length_mm=float(np.sum(np.linalg.norm(
@@ -344,14 +349,14 @@ class SectionProjector:
             flat_panel_length_fraction=self.flat_fraction,
             physical_wall_coverage_fraction=self.flat_fraction,
             geometry_supported=self.supported,
-            curved_panel_proxy=self.flat_fraction<.6,
+            curved_panel_proxy=(not physical_segments or self.flat_fraction<.6),
             global_anchor_rank=global_fold_rank, piece_anchor_ranks=piece_fold_ranks,
             global_rank=self.qglobal.shape[1], assembly_rank=self.qassembly.shape[1],
             coarse_deformation_rank=self.qdist.shape[1], other_extension_rank=self.qother.shape[1],
             local_rank=self.qlocal.shape[1], wall_bending_rank=int(np.linalg.matrix_rank(self.pwalllocal)),
             panel_extension_constraint_rank=crank,
             maximum_panel_arc_length=float(max(wall_lengths) if wall_lengths else 0.),
-            split_definition='normal moving-chord wall-bending L first; then fold-driven G/A/O/D; tangential/corner closure residual assigned to Other')
+            split_definition='normal wall bending relative to rigid-exact moving curved reference first; fold-driven G/A/O/D; tangential and compact-bend residual assigned to Other')
 
     def _weighted_components(self, coefficients):
         y=np.asarray(coefficients,dtype=float)
@@ -369,6 +374,12 @@ class SectionProjector:
         parts=self._weighted_components(weighted_coefficients)
         norms={k:float(np.sum(v*v)) for k,v in parts.items()}
         ldg=norms['L']+norms['D']+norms['G']; all_self=ldg+norms['A']+norms['O']
+        # Pure Other/Assembly motion can leave round-off in L/D/G. Do not
+        # normalize that negligible remainder into apparently large shares.
+        if ldg <= 1e-24*all_self:
+            for key in ('L', 'D', 'G'):
+                norms[key]=0.
+            ldg=0.
         reconstruction=sum(parts.values()); y=np.asarray(weighted_coefficients,dtype=float)
         x=(y.reshape(-1,len(self.sqrtw))/self.sqrtw[None,:])
         curvature=float(np.sum((x@self.curvature_matrix.T)**2)) if self.curvature_matrix.size else 0.
@@ -734,7 +745,7 @@ def main(argv=None):
     parser.add_argument('--top-components', type=int, default=3)
     parser.add_argument('--corner-angle', type=float, default=15., help='Deprecated compatibility option')
     parser.add_argument('--wall-angle-deg', type=float, default=3.,
-                        help='Maximum direction change used to merge exported collinear segments into one physical wall')
+                        help='Direction-change threshold for the mesh fallback when source wall geometry is unavailable')
     parser.add_argument('--family-threshold', type=float, default=.9)
     parser.add_argument('--max-assembly-percent', type=float, default=25.,
                         help='Above this self-norm share, report Assembly-like instead of forcing L/D/G')

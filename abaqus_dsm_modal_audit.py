@@ -429,10 +429,12 @@ def process(args):
         pieces = [t['instance'] for t in geo['tracks']]
         grid = visuals.common_grid(geo['tracks'], geo['tolerance'])
         physical_segments=(build.get('source_inputs') or {}).get('section_segments')
+        variant_options = ([dict(bend_radius_fraction=f) for f in (.03, .05)]
+                           if physical_segments else [dict(wall_angle_deg=a) for a in (2., 5.)])
         variants = [enhanced.SectionProjector(geo['xy'], geo['edges'], pieces,
                     [t['weight'] for t in geo['tracks']],
-                    physical_segments=physical_segments, wall_angle_deg=angle)
-                    for angle in (2., 5.)]
+                    physical_segments=physical_segments, **options)
+                    for options in variant_options]
         qrelative = visuals.relative_piece_basis(proxy, pieces)
         coverage = min(m['coverage'] for m in geo['mesh'])
         proxy_layers = len(grid['z']) if grid is not None else geo['cap']
@@ -474,6 +476,8 @@ def process(args):
                     displacement_cross_percent=0., component_norm_sum_over_input=1., condition=None)
                 energy = None
                 direct_diagnostics = visuals.rigid_shares(vector, proxy, qrelative)
+                projected['component_norm_sum_over_input'] = direct_diagnostics['component_norm_sum_over_input']
+                projected['displacement_cross_percent'] = 100.*(1.-projected['component_norm_sum_over_input'])
             label = classify(projected, args.dominance, args.max_residual)
             if not mechanical and direct_diagnostics:
                 if direct_diagnostics.get('assembly_percent', 0.) >= args.max_assembly_percent:
@@ -621,7 +625,8 @@ def process(args):
         dsm_inputs_MPa={name: family_assessment[f]['accepted_stress_MPa'] for name, f in
                         (('Fcrl', 'L'), ('Fcrd', 'D'), ('Fcre', 'G'))},
         clusters=clusters, modes=results, direct_grid_available=grid is not None, minimum_track_coverage=coverage,
-        sensitivity_angles_deg=[10., 15., 25.],
+        sensitivity_angles_deg=None if physical_segments else [2., 3., 5.],
+        sensitivity_radius_fractions=[.03, .04, .05] if physical_segments else None,
         fields_available_in_all_modes=common_fields,
         requested_fields_missing_from_some_modes=sorted(set(build.get('modal_output', {}).get('fields', []))-set(common_fields)),
         limitations=['Not a classical signature curve or an automatic cFSM/GBT basis generator.',
@@ -629,7 +634,7 @@ def process(args):
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
             'Independent rigid motion of built-up pieces is reported as Assembly and is not counted as Distortional.',
             'Anchor transverse extension is reported as Other and is not counted as Distortional.',
-            'Local is measured first as physical-wall bending relative to moving wall chords; D is evaluated only from the remaining inextensional fold/coarse motion.',
+            'Local is measured first relative to endpoint-driven curved-wall motion that reproduces rigid rotation; D uses the remaining inextensional fold/coarse motion.',
             'L/D/G family energy requires compatible full elastic K and all retained DOFs; signed cross terms must not be discarded.',
             'SUPPLIED review/reference evidence is recorded, not independently certified by this program.',
             'No conclusion of family absence or DSM applicability follows from missing candidates.'])
