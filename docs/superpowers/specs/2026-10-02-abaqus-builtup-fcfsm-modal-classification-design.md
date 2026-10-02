@@ -86,6 +86,17 @@ with no artificial cross-gap compatibility.
 
 This keeps the family definition invariant when bolt spacing changes. Bolt spacing changes the observed Abaqus mode, not the definition of Local/Distortional/Global.
 
+
+### 4.1 K0 solvability and rigid-nullspace handling
+
+The implementation must not make `K0` invertible by introducing artificial ties between pieces.
+
+For each retained longitudinal harmonic, the reference operator shall be formed on the physically admissible reduced DOF space after applying only the documented harmonic/end-condition kinematics. The code must explicitly test symmetry, rank and positive definiteness on that reduced space.
+
+If exact rigid/null modes remain, they shall be handled by an explicit nullspace projection or Moore-Penrose solve on the orthogonal complement, with the nullspace and tolerance recorded in provenance. Arbitrary pinning that changes L/D/G content, or cross-piece constraints added only to regularize the matrix, is forbidden.
+
+Every use of the notation `K0^-1` in this specification therefore means the unique solve on the validated energetic subspace, not an unconditional dense matrix inverse.
+
 ## 5. Longitudinal representation
 
 An Abaqus eigenmode of the discrete-bolted member may contain more than one longitudinal harmonic. Classification shall therefore use a multi-harmonic representation rather than only the dominant half-wavelength.
