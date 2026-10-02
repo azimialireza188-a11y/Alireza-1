@@ -58,6 +58,25 @@ seam motion = diagnostic مستقل
 
 ستون‌های اصلی Stage A در `modal_percentages.csv` شامل `L/D/G/O_energy_percent`، سهم‌های vector cross-check، `assembly_percent`، سه seam index، `final_family`، `quality_state`، residualها، metric sensitivity و cluster id هستند. اگر force-resultant diagnostic بین قطعات هنوز از دادهٔ همان ران قابل بازیابی نباشد، مقدار آن unavailable باقی می‌ماند و **صفر فرض نمی‌شود**.
 
+### خروجی فشردهٔ Parquet برای بازبینی خارج از Abaqus
+
+برای ران‌های جدید `--modal-audit` می‌توان sidecar فشردهٔ Parquet ساخت. اگر تضمین خروجی لازم است، قبل از ران در Python معمولی PyArrow را نصب کنید:
+
+```bat
+python -m pip install pyarrow
+```
+
+و به دستور Abaqus اضافه کنید:
+
+```bat
+  --modal-audit ^
+  --parquet-export required
+```
+
+`required` قبل از build/solve وجود runtime معتبر PyArrow را بررسی می‌کند. `auto` پیش‌فرض است و در صورت نبود PyArrow فقط هشدار می‌دهد؛ `off` این خروجی را غیرفعال می‌کند. در صورت نیاز مسیر Python معمولی را می‌توان با `--parquet-python "C:\path\python.exe"` مشخص کرد. آستانهٔ ذخیرهٔ harmonicهای per-node با `--parquet-harmonic-min-share` کنترل می‌شود و پیش‌فرض `0.001` است.
+
+خروجی نهایی `modal_analysis_parquet_bundle.zip` در پوشهٔ همان modal audit قرار می‌گیرد و شامل summary مودها، harmonicها، peak-section shapeهای U/UR، ضرایب section برای harmonicهای مهم، eigenspace clusterها و provenance است. این بسته برای انتقال و تحلیل بعدی طراحی شده است و جای ODB مرجع را نمی‌گیرد.
+
 ### منابع سیستم و گزارش پیشرفت
 
 حالت پیش‌فرض تهاجمی است:
