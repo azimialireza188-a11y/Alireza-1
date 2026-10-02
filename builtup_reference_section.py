@@ -43,9 +43,50 @@ def _canonical_piece_records(section_segments):
     return records
 
 
+PLATE_DEFINITION = 'fcFSM parallel-adjacent flat strips excluding curved-corner strips'
+PLATE_DEFINITION_VERSION = 'fcfsm_parallel_adjacent_v1'
+
+
+def _parallel(a, b, tolerance=1e-4):
+    a=np.asarray(a,dtype=float); b=np.asarray(b,dtype=float)
+    na=float(np.linalg.norm(a)); nb=float(np.linalg.norm(b))
+    if na<=0 or nb<=0:
+        return False
+    ua=a/na; ub=b/nb
+    return bool(np.max(np.abs(ua-ub)) < tolerance or
+                np.max(np.abs(ua+ub)) < tolerance)
+
+
+def _fcfsm_plate_groups(points, element_ids, corner_ids, piece):
+    """Match SecAnal_fcFSM: connected parallel strips form one flat plate."""
+    points=np.asarray(points,dtype=float)
+    groups=[]; current=[]
+    for i,eid in enumerate(element_ids):
+        if eid in corner_ids:
+            if current:
+                groups.append(dict(piece=piece,element_ids=current)); current=[]
+            continue
+        if not current:
+            current=[eid]; continue
+        prev_index=i-1
+        prev_eid=element_ids[prev_index]
+        if prev_eid in corner_ids:
+            groups.append(dict(piece=piece,element_ids=current)); current=[eid]; continue
+        prev=points[prev_index+1]-points[prev_index]
+        this=points[i+1]-points[i]
+        if _parallel(prev,this):
+            current.append(eid)
+        else:
+            groups.append(dict(piece=piece,element_ids=current)); current=[eid]
+    if current:
+        groups.append(dict(piece=piece,element_ids=current))
+    return groups
+
+
 def _hash_payload(records, thickness_mm, E_MPa, nu, length_mm):
     payload = dict(
-        version='builtup_reference_v1',
+        version='builtup_reference_v2',
+        plate_definition_version=PLATE_DEFINITION_VERSION,
         pieces=[[[round(float(x), 12) for x in p] for p in r['points']] for r in records],
         thickness_mm=round(float(thickness_mm), 12),
         E_MPa=round(float(E_MPa), 8),
@@ -98,10 +139,8 @@ def build_reference_section(section_segments, thickness_mm, E_MPa, nu, length_mm
             for i in range(int(lo), int(hi)):
                 if 0 <= i < len(local_element_ids):
                     corner_ids.add(local_element_ids[i])
-        for start, end in layout['walls']:
-            ids = local_element_ids[int(start):int(end)]
-            if ids:
-                plate_groups.append(dict(piece=piece, element_ids=list(ids)))
+        plate_groups.extend(_fcfsm_plate_groups(
+            points,local_element_ids,corner_ids,piece))
         piece_info.append(dict(name=piece, original_name=record['original'],
                                node_ids=local_node_ids, element_ids=local_element_ids,
                                points=points.tolist()))
@@ -123,7 +162,9 @@ def build_reference_section(section_segments, thickness_mm, E_MPa, nu, length_mm
                                point_a=[float(xa), float(ya)], point_b=[float(xb), float(yb)]))
 
     return dict(
-        version='builtup_reference_v1',
+        version='builtup_reference_v2',
+        plate_definition=PLATE_DEFINITION,
+        plate_definition_version=PLATE_DEFINITION_VERSION,
         pieces=piece_info,
         nodes=nodes,
         elements=elements,
