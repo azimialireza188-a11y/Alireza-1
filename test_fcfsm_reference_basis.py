@@ -87,6 +87,12 @@ class FcFSMBasisTests(unittest.TestCase):
         self.assertEqual(basis.metadata['plate_count'],len(ref['plate_groups']))
         self.assertEqual(basis.metadata['corner_element_count'],len(ref['corner_elements']))
 
+    def test_basis_provenance_records_corner_definition_version(self):
+        ref=self.reference()
+        basis=f.build_fcfsm_basis(ref,2)
+        self.assertEqual(basis.metadata['corner_definition_version'],
+                         ref['corner_definition_version'])
+
     def test_cache_key_ignores_connection_metadata(self):
         ref = self.reference()
         a = f.basis_cache_key(ref['definition_hash'], 7, 'S-S')
