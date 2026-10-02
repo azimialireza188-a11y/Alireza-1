@@ -39,13 +39,16 @@ member_length = 1000.0;
 m = 2;
 BC = 'S-S';
 
-% Three flat plates, four nodes. Sharp vertices are folds, not finite-radius
-% corner strips, so cornerStrips is empty for this benchmark.
-xy = [0.0, 0.0;
-      50.0, 0.0;
+% Five-plate lipped open channel, selected so the three whole-section
+% equilibrium equations leave a nontrivial Distortional wall-force nullspace.
+% Sharp vertices are folds, not finite-radius corner strips.
+xy = [20.0, 0.0;
+       0.0, 0.0;
+       0.0, 100.0;
       50.0, 100.0;
-      0.0, 100.0];
-connectivity = [1,2; 2,3; 3,4];
+      50.0, 0.0;
+      30.0, 0.0];
+connectivity = [1,2; 2,3; 3,4; 4,5; 5,6];
 nNode = size(xy,1);
 nElem = size(connectivity,1);
 
@@ -64,6 +67,9 @@ cornerStrips = [];
 
 % Native fcFSM geometry/force definitions.
 [C_L, J_D, J_GD] = SecAnal_fcFSM(node, elem, cornerStrips);
+if size(J_D,2) < 1
+    error('Benchmark geometry produced an empty Distortional equilibrium nullspace.');
+end
 
 % Assemble native CUFSM elastic K for this exact S-S harmonic using the
 % unmodified CUFSM element functions.
@@ -117,7 +123,7 @@ reference = struct( ...
         'method','native SecAnal_fcFSM + klocal/trans/assemble', ...
         'scope','open-section implementation benchmark; not four-piece Abaqus validation'), ...
     'geometry',struct( ...
-        'name','open_channel_three_plate', ...
+        'name','lipped_open_channel_five_plate', ...
         'nodes',xy, ...
         'elements',connectivity, ...
         'corner_element_ids',cornerStrips, ...
