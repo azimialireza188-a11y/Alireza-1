@@ -172,6 +172,130 @@ def seam_relative_diagnostics(mode,reference):
                 convention='RMS seam relative motion after common rigid-rotation correction')
 
 
+def _longitudinal_arrays(mode,reference):
+    z=np.asarray(mode['z'],float).reshape(-1)
+    u=np.asarray(mode['U'],float); ur=np.asarray(mode['UR'],float)
+    n=len(reference['nodes'])
+    if u.shape!=(len(z),n,3) or ur.shape!=u.shape:
+        raise ValueError('Longitudinal mode U/UR must have shape (stations,reference nodes,3)')
+    if len(z)<2 or not np.all(np.isfinite(z)) or not np.all(np.isfinite(u)) or not np.all(np.isfinite(ur)):
+        raise ValueError('Longitudinal diagnostic requires finite data at at least two stations')
+    order=np.argsort(z)
+    z=z[order]; u=u[order]; ur=ur[order]
+    dz=np.diff(z)
+    if np.any(dz<=0):
+        raise ValueError('Longitudinal stations must be distinct')
+    wz=np.zeros(len(z),float)
+    wz[:-1]+=dz/2.; wz[1:]+=dz/2.
+    return z,u,ur,wz
+
+
+def assembly_diagnostics_longitudinal(mode,reference,metric=None):
+    """Assembly diagnostic integrated over the complete observed eigenmode."""
+    z,u,ur,wz=_longitudinal_arrays(mode,reference)
+    xyz=np.array([[n['x'],n['y'],0.] for n in reference['nodes']],float)
+    weights=_nodal_weights(reference)
+    t=float(reference['material']['thickness_mm'])
+    rotation_scale=(t/math.sqrt(12.)) if metric is None else float(
+        metric.get('rotation_scale_mm',t/math.sqrt(12.)))
+    pieces=sorted({n['piece'] for n in reference['nodes']})
+    rel_total=within_total=mode_total=0.0
+    for iz in range(len(z)):
+        common_q,unused=_rigid_fit(u[iz],ur[iz],xyz,weights,rotation_scale)
+        rel_u=np.zeros_like(u[iz]); rel_ur=np.zeros_like(ur[iz])
+        within_u=np.zeros_like(u[iz]); within_ur=np.zeros_like(ur[iz])
+        for piece in pieces:
+            ids=np.array([i for i,node in enumerate(reference['nodes'])
+                          if node['piece']==piece],dtype=int)
+            unused_q,(pu,pur)=_rigid_fit(
+                u[iz,ids],ur[iz,ids],xyz[ids],weights[ids],rotation_scale)
+            common_piece_u,common_piece_ur=_unstack(
+                _design(xyz[ids])@common_q,len(ids))
+            rel_u[ids]=pu-common_piece_u
+            rel_ur[ids]=pur-common_piece_ur
+            within_u[ids]=u[iz,ids]-pu
+            within_ur[ids]=ur[iz,ids]-pur
+        rel_total += wz[iz]*_metric_norm2(rel_u,rel_ur,weights,rotation_scale)
+        within_total += wz[iz]*_metric_norm2(within_u,within_ur,weights,rotation_scale)
+        mode_total += wz[iz]*_metric_norm2(u[iz],ur[iz],weights,rotation_scale)
+    denom=rel_total+within_total
+    negligible=max(1e-250,1e-20*max(mode_total,1e-250))
+    if denom<=negligible:
+        ap=wp=0.0
+    else:
+        ap=100.*rel_total/denom
+        wp=100.*within_total/denom
+    return dict(
+        assembly_percent=ap,
+        within_piece_deformation_percent=wp,
+        rotation_scale_mm=rotation_scale,
+        station_count=len(z),
+        longitudinal_span_mm=float(z[-1]-z[0]),
+        convention=('longitudinal trapezoidal integral of relative piece rigid-like '
+                    'motion / non-common modal motion; not subtracted from L/D/G'))
+
+
+def seam_relative_diagnostics_longitudinal(mode,reference):
+    """RMS seam relative-motion indices integrated along the whole member."""
+    z,u,ur,wz=_longitudinal_arrays(mode,reference)
+    seams=_seam_map(reference)
+    if not seams:
+        return dict(normal_opening_index=0.,transverse_slip_index=0.,
+                    longitudinal_slip_index=0.,seam_count=0,station_count=len(z),
+                    values=[])
+    node_weights=_nodal_weights(reference)
+    xyz=np.array([[n['x'],n['y'],0.] for n in reference['nodes']],float)
+    radius=max(1.0,math.sqrt(float(
+        np.sum(node_weights*np.sum(xyz[:,:2]**2,axis=1))/np.sum(node_weights))))
+    component_sq=np.zeros(3,float)
+    base_sq=total_scale_sq=0.0
+    per_seam={int(seam['id']):np.zeros(3,float) for seam,*unused in seams}
+    zsum=float(np.sum(wz))
+    for iz in range(len(z)):
+        omega=np.sum(node_weights[:,None]*ur[iz],axis=0)/np.sum(node_weights)
+        vals=[]
+        for seam,ia,ib,ra,rb,n,tangent in seams:
+            rigid_delta=np.cross(omega,rb-ra)
+            delta=(u[iz,ib]-u[iz,ia])-rigid_delta
+            comp=np.array([np.dot(delta,n),np.dot(delta,tangent),delta[2]],float)
+            vals.append(comp)
+            per_seam[int(seam['id'])]+=wz[iz]*comp*comp
+        vals=np.asarray(vals,float)
+        component_sq += wz[iz]*np.mean(vals*vals,axis=0)
+        corrected=u[iz]-np.cross(np.broadcast_to(omega,xyz.shape),xyz)
+        center=np.sum(node_weights[:,None]*corrected,axis=0)/np.sum(node_weights)
+        corrected=corrected-center
+        base_sq += wz[iz]*float(
+            np.sum(node_weights[:,None]*corrected*corrected)/np.sum(node_weights))
+        total_scale_sq += wz[iz]*float(
+            np.sum(node_weights[:,None]*(u[iz]*u[iz]+
+                   (radius*ur[iz])*(radius*ur[iz])))/np.sum(node_weights))
+    base=math.sqrt(max(0.0,base_sq/max(zsum,1e-250)))
+    total_scale=math.sqrt(max(0.0,total_scale_sq/max(zsum,1e-250)))
+    if base<=max(1e-250,1e-12*total_scale):
+        indices=np.zeros(3,float)
+    else:
+        indices=100.*np.sqrt(np.maximum(component_sq,0.)/max(zsum,1e-250))/base
+    values=[]
+    for seam_id,sq in sorted(per_seam.items()):
+        rms=np.sqrt(np.maximum(sq,0.)/max(zsum,1e-250))
+        values.append(dict(id=seam_id,normal_rms=float(rms[0]),
+                           transverse_rms=float(rms[1]),
+                           longitudinal_rms=float(rms[2])))
+    return dict(
+        normal_opening_index=float(indices[0]),
+        transverse_slip_index=float(indices[1]),
+        longitudinal_slip_index=float(indices[2]),
+        seam_count=len(seams),
+        station_count=len(z),
+        longitudinal_span_mm=float(z[-1]-z[0]),
+        values=values,
+        convention=('longitudinal trapezoidal RMS seam relative motion after '
+                    'station-wise common rigid-rotation correction'))
+
+
+
+
 def impose_test_seam_motion(U,reference,seam_id,component,magnitude):
     """Deterministic synthetic helper used by regression tests."""
     for seam,ia,ib,ra,rb,n,t in _seam_map(reference):
