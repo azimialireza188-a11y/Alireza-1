@@ -111,8 +111,11 @@ class ModalArchive(object):
         self.path = path
         self.data = np.load(path, allow_pickle=False)
         self.metadata = json.loads(str(self.data['metadata'].item()))
+        self.instances = np.asarray(self.data['instances']).astype(str)
+        self.labels = np.asarray(self.data['labels'], dtype=np.int64)
+        self.coordinates = np.asarray(self.data['coordinates'], dtype=float)
         self.node_keys = [(str(n), int(label))
-                          for n, label in zip(self.data['instances'], self.data['labels'])]
+                          for n, label in zip(self.instances, self.labels)]
 
     def __enter__(self):
         return self
@@ -131,6 +134,137 @@ class ModalArchive(object):
                     eigenvalue=float(self.data['eigenvalues'][index]),
                     U=np.asarray(self.data['U'][index], dtype=float),
                     UR=np.asarray(self.data['UR'][index], dtype=float))
+
+
+def _piece_arclength(points, xy):
+    """Project one section point onto a source polyline and return (s,distance)."""
+    p=np.asarray(points,dtype=float)
+    q=np.asarray(xy,dtype=float)
+    seg=p[1:]-p[:-1]
+    lengths=np.linalg.norm(seg,axis=1)
+    if len(seg)==0 or np.any(lengths<=0):
+        raise ValueError('Reference piece polyline is invalid')
+    cumulative=np.r_[0.,np.cumsum(lengths)]
+    best=None
+    for i,d in enumerate(seg):
+        t=float(np.dot(q-p[i],d)/np.dot(d,d))
+        t=min(1.0,max(0.0,t))
+        projection=p[i]+t*d
+        distance=float(np.linalg.norm(q-projection))
+        candidate=(distance,float(cumulative[i]+t*lengths[i]))
+        if best is None or candidate<best:
+            best=candidate
+    return best[1],best[0]
+
+
+def _cluster_levels(values,tolerance):
+    result=[]
+    for value in sorted(float(x) for x in values):
+        if not result or abs(value-result[-1][-1])>tolerance:
+            result.append([value])
+        else:
+            result[-1].append(value)
+    return [float(sum(group)/len(group)) for group in result]
+
+
+def _interp_section(s_nodes, values, targets, tolerance):
+    order=np.argsort(s_nodes)
+    s=np.asarray(s_nodes,float)[order]
+    v=np.asarray(values,float)[order]
+    unique_s=[]; unique_v=[]
+    for si,vi in zip(s,v):
+        if unique_s and abs(si-unique_s[-1])<=tolerance:
+            unique_v[-1]=(unique_v[-1]+vi)/2.0
+            unique_s[-1]=(unique_s[-1]+si)/2.0
+        else:
+            unique_s.append(float(si)); unique_v.append(np.asarray(vi,float))
+    s=np.asarray(unique_s,float); v=np.asarray(unique_v,float)
+    if len(s)<2:
+        raise ValueError('A section station needs at least two mapped shell nodes')
+    result=np.empty((len(targets),v.shape[1]),float)
+    for j,target in enumerate(targets):
+        if target<s[0]-tolerance or target>s[-1]+tolerance:
+            raise ValueError('Canonical reference point lies outside available shell section path')
+        target=min(max(float(target),float(s[0])),float(s[-1]))
+        k=int(np.searchsorted(s,target))
+        if k==0:
+            result[j]=v[0]
+        elif k==len(s):
+            result[j]=v[-1]
+        elif abs(target-s[k])<=tolerance:
+            result[j]=v[k]
+        else:
+            a,b=k-1,k
+            fraction=(target-s[a])/(s[b]-s[a])
+            result[j]=(1.0-fraction)*v[a]+fraction*v[b]
+    return result
+
+
+def map_mode_to_reference(archive, mode_index, reference):
+    """Map one archived Abaqus mode to canonical-section nodes at every z station.
+
+    Mapping is by each physical piece's source-polyline arclength, not Euclidean
+    nearest-neighbour distance, so nearby opposing lips cannot be confused.
+    """
+    row=archive.read_mode(mode_index)
+    coords=np.asarray(archive.coordinates,float)
+    if coords.ndim!=2 or coords.shape[1]!=3 or len(coords)!=len(archive.node_keys):
+        raise ValueError('Modal archive coordinates are invalid')
+    u=np.asarray(row['U'],float); ur=np.asarray(row['UR'],float)
+    pieces={p['name']:p for p in reference['pieces']}
+    ref_nodes=reference['nodes']
+    if not ref_nodes:
+        raise ValueError('Canonical reference has no nodes')
+    scale=max(1.0,float(np.max(np.abs(coords))))
+    ztol=max(1e-7,1e-9*scale)
+    stol=max(1e-7,1e-9*scale)
+
+    # All four dependent instances originate from the same longitudinal mesh;
+    # use their union and require every physical piece at every retained level.
+    zlevels=_cluster_levels(coords[:,2],ztol)
+    mapped_u=np.empty((len(zlevels),len(ref_nodes),3),float)
+    mapped_ur=np.empty_like(mapped_u)
+
+    ref_index={node['id']:i for i,node in enumerate(ref_nodes)}
+    for canonical,piece in pieces.items():
+        original=str(piece['original_name'])
+        indices=np.where(archive.instances==original)[0]
+        if not len(indices):
+            raise ValueError('Archive is missing physical piece instance '+original)
+        points=np.asarray(piece['points'],float)
+        perimeter=float(np.sum(np.linalg.norm(np.diff(points,axis=0),axis=1)))
+        section_tol=max(1e-5,1e-6*max(perimeter,1.0))
+        snode={}
+        for idx in indices:
+            sval,dist=_piece_arclength(points,coords[idx,:2])
+            if dist>section_tol:
+                raise ValueError('ODB node lies off canonical source polyline for '+original)
+            snode[int(idx)]=sval
+        target_ids=list(piece['node_ids'])
+        targets=[]
+        for node_id in target_ids:
+            node=ref_nodes[ref_index[node_id]]
+            sval,dist=_piece_arclength(points,[node['x'],node['y']])
+            if dist>section_tol:
+                raise ValueError('Canonical node lies off its piece source polyline')
+            targets.append(sval)
+        for iz,z in enumerate(zlevels):
+            at=[int(i) for i in indices if abs(coords[int(i),2]-z)<=ztol]
+            if len(at)<2:
+                raise ValueError('Physical piece lacks a complete shell section at z=%g' % z)
+            svals=[snode[i] for i in at]
+            out_u=_interp_section(svals,u[at],targets,stol)
+            out_ur=_interp_section(svals,ur[at],targets,stol)
+            for local,node_id in enumerate(target_ids):
+                j=ref_index[node_id]
+                mapped_u[iz,j]=out_u[local]
+                mapped_ur[iz,j]=out_ur[local]
+    if not np.all(np.isfinite(mapped_u)) or not np.all(np.isfinite(mapped_ur)):
+        raise ValueError('Canonical modal mapping produced incomplete values')
+    return dict(mode=row['mode'],eigenvalue=row['eigenvalue'],
+                z=np.asarray(zlevels,float),U=mapped_u,UR=mapped_ur)
+
+
 
 
 def open_modal_archive(path):
