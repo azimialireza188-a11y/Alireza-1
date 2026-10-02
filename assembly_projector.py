@@ -106,33 +106,73 @@ def assembly_diagnostics(mode,reference,metric=None):
                 convention='relative piece rigid-like motion / non-common modal motion; not subtracted from L/D/G')
 
 
-def _nearest_node(reference,piece,xy):
-    candidates=[(i,n) for i,n in enumerate(reference['nodes']) if n['piece']==piece]
-    if not candidates:
+def _piece_interpolation(reference,piece,xy):
+    """Return nodal interpolation weights for any point on a canonical piece."""
+    info=next((p for p in reference['pieces'] if p['name']==piece),None)
+    if info is None:
         raise ValueError('Unknown seam piece '+str(piece))
-    p=np.asarray(xy,float)
-    dist=[np.linalg.norm(np.array([n['x'],n['y']])-p) for i,n in candidates]
-    j=int(np.argmin(dist))
-    scale=max(1.,max(math.hypot(n['x'],n['y']) for n in reference['nodes']))
-    if dist[j]>1e-6*scale:
-        raise ValueError('Seam point does not map to a reference node')
-    return candidates[j][0]
+    points=np.asarray(info['points'],float)
+    node_lookup={n['id']:i for i,n in enumerate(reference['nodes'])}
+    node_ids=list(info['node_ids'])
+    if len(points)!=len(node_ids) or len(points)<2:
+        raise ValueError('Invalid canonical piece polyline')
+    target=np.asarray(xy,float)
+    best=None
+    for i in range(len(points)-1):
+        d=points[i+1]-points[i]
+        den=float(np.dot(d,d))
+        if den<=0:
+            continue
+        t=float(np.dot(target-points[i],d)/den)
+        tc=min(1.0,max(0.0,t))
+        projected=points[i]+tc*d
+        distance=float(np.linalg.norm(target-projected))
+        candidate=(distance,i,tc,projected)
+        if best is None or candidate[0]<best[0]:
+            best=candidate
+    if best is None:
+        raise ValueError('Seam point cannot be projected onto canonical piece')
+    distance,i,t,projected=best
+    scale=max(1.0,float(np.max(np.abs(points))),float(np.linalg.norm(points[-1]-points[0])))
+    if distance>max(1e-7,1e-6*scale):
+        raise ValueError('Seam point lies off the canonical piece polyline')
+    weights=[]
+    if 1.0-t>1e-14:
+        weights.append((node_lookup[node_ids[i]],1.0-t))
+    if t>1e-14:
+        weights.append((node_lookup[node_ids[i+1]],t))
+    if not weights:
+        weights=[(node_lookup[node_ids[i]],1.0)]
+    return weights,np.array([projected[0],projected[1],0.],float)
+
+
+def _interp_field(field,mapping):
+    result=np.zeros(3,float)
+    for index,weight in mapping:
+        result += float(weight)*np.asarray(field[index],float)
+    return result
+
+
+def _apply_point_delta(field,mapping,delta):
+    denom=sum(float(weight)**2 for unused,weight in mapping)
+    if denom<=1e-250:
+        raise ValueError('Degenerate seam interpolation weights')
+    for index,weight in mapping:
+        field[index] += (float(weight)/denom)*np.asarray(delta,float)
 
 
 def _seam_map(reference):
     result=[]
     for seam in reference.get('seam_pairs',[]):
-        ia=_nearest_node(reference,seam['piece_a'],seam['point_a'])
-        ib=_nearest_node(reference,seam['piece_b'],seam['point_b'])
-        a=np.array([reference['nodes'][ia]['x'],reference['nodes'][ia]['y'],0.],float)
-        b=np.array([reference['nodes'][ib]['x'],reference['nodes'][ib]['y'],0.],float)
+        mapa,a=_piece_interpolation(reference,seam['piece_a'],seam['point_a'])
+        mapb,b=_piece_interpolation(reference,seam['piece_b'],seam['point_b'])
         gap=b-a; gap[2]=0.
         length=np.linalg.norm(gap[:2])
         if length<=1e-12:
             raise ValueError('Seam pair has zero geometric gap')
         normal=gap/length
         tangent=np.array([-normal[1],normal[0],0.])
-        result.append((seam,ia,ib,a,b,normal,tangent))
+        result.append((seam,mapa,mapb,a,b,normal,tangent))
     return result
 
 
@@ -147,9 +187,9 @@ def seam_relative_diagnostics(mode,reference):
     # mean prevents local U-only seam motion from biasing the rigid correction.
     omega=np.sum(weights[:,None]*ur,axis=0)/np.sum(weights)
     vals=[]
-    for seam,ia,ib,ra,rb,n,t in seams:
+    for seam,mapa,mapb,ra,rb,n,t in seams:
         rigid_delta=np.cross(omega,rb-ra)
-        delta=(u[ib]-u[ia])-rigid_delta
+        delta=(_interp_field(u,mapb)-_interp_field(u,mapa))-rigid_delta
         vals.append(dict(id=seam['id'],
                          normal=float(np.dot(delta,n)),
                          transverse=float(np.dot(delta,t)),
@@ -254,9 +294,9 @@ def seam_relative_diagnostics_longitudinal(mode,reference):
     for iz in range(len(z)):
         omega=np.sum(node_weights[:,None]*ur[iz],axis=0)/np.sum(node_weights)
         vals=[]
-        for seam,ia,ib,ra,rb,n,tangent in seams:
+        for seam,mapa,mapb,ra,rb,n,tangent in seams:
             rigid_delta=np.cross(omega,rb-ra)
-            delta=(u[iz,ib]-u[iz,ia])-rigid_delta
+            delta=(_interp_field(u[iz],mapb)-_interp_field(u[iz],mapa))-rigid_delta
             comp=np.array([np.dot(delta,n),np.dot(delta,tangent),delta[2]],float)
             vals.append(comp)
             per_seam[int(seam['id'])]+=wz[iz]*comp*comp
@@ -298,14 +338,15 @@ def seam_relative_diagnostics_longitudinal(mode,reference):
 
 def impose_test_seam_motion(U,reference,seam_id,component,magnitude):
     """Deterministic synthetic helper used by regression tests."""
-    for seam,ia,ib,ra,rb,n,t in _seam_map(reference):
+    for seam,mapa,mapb,ra,rb,n,t in _seam_map(reference):
         if int(seam['id'])!=int(seam_id):
             continue
         if component=='normal': direction=n
         elif component=='tangent': direction=t
         elif component=='longitudinal': direction=np.array([0.,0.,1.])
         else: raise ValueError('Unknown test seam component')
-        U[ia]-=.5*float(magnitude)*direction
-        U[ib]+=.5*float(magnitude)*direction
+        delta=.5*float(magnitude)*direction
+        _apply_point_delta(U,mapa,-delta)
+        _apply_point_delta(U,mapb,delta)
         return
     raise ValueError('Seam id not found')
