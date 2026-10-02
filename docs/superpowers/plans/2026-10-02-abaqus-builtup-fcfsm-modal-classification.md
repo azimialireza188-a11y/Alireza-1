@@ -18,6 +18,7 @@
 - Native CUFSM exporter: `benchmark_fcfsm_classifier_cufsm.m`; actual MATLAB/CUFSM execution remains **PENDING**.
 - Abaqus 2024 build-only integration on the target Windows host remains **PENDING**.
 - Abaqus 2024 full `--modal-audit` integration/performance evidence remains **PENDING**.
+- Compact Parquet review sidecar is implemented and regression-tested; target-host PyArrow discovery/export remains part of the pending Abaqus integration check.
 - Step 4 imperfections and Step 5 GMNIA scripts are outside this feature diff and remain unchanged.
 - Do not merge this feature branch to `main` as scientifically validated until the pending native CUFSM and Abaqus target-host checks are recorded.
 
