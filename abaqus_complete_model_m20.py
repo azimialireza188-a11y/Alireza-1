@@ -1071,6 +1071,22 @@ def main(argv=None):
         state['pipeline_run_report']=dict(
             json_path=report_info['json_path'],
             csv_path=report_info['csv_path'])
+
+    def refresh_parquet_pipeline_tables():
+        bundle=state.get('parquet_bundle') or {}
+        timing=state.get('pipeline_run_report') or {}
+        directory=bundle.get('directory')
+        report_path=timing.get('json_path')
+        if not (directory and report_path and os.path.isdir(directory)
+                and os.path.isfile(report_path) and parquet_runtime.get('available')):
+            return None
+        refreshed=parquet_export_runner.refresh_pipeline_tables(
+            directory,report_path,parquet_runtime)
+        bundle['pipeline_timing_refresh']=refreshed
+        if refreshed.get('zip_path'):
+            bundle['zip_path']=refreshed['zip_path']
+        state['parquet_bundle']=bundle
+        return refreshed
     try:
         save_state('BUILDING')
         # Eigenvalue buckling supports solver parallelism, not element-loop parallelism.
@@ -1137,6 +1153,8 @@ def main(argv=None):
             progress('ENHANCED: mode families, spectra, envelopes and interactive report.')
             state['enhanced_report'] = enhanced.main(enhanced_arguments(report))
             tracker.finish('ENHANCED')
+            state['progress'] = tracker.summary()
+            save_state('ENHANCED_COMPLETE')
             if args.modal_audit:
                 tracker.start('MODAL_AUDIT')
                 progress('AUDIT: direct shapes, sensitivity and graphical explorer.')
@@ -1149,6 +1167,8 @@ def main(argv=None):
                 state['modal_audit'] = run_modal_audit(
                     output_dir,progress_callback=audit_progress)
                 tracker.finish('MODAL_AUDIT')
+                state['progress'] = tracker.summary()
+                save_state('MODAL_AUDIT_COMPLETE')
                 if parquet_runtime.get('available'):
                     tracker.start('PARQUET_EXPORT')
                     progress('PARQUET_EXPORT: compact review bundle for upload/analysis.')
@@ -1157,6 +1177,9 @@ def main(argv=None):
                         args.parquet_harmonic_min_share)
                     tracker.finish('PARQUET_EXPORT',
                                    note=os.path.basename(state['parquet_bundle'].get('zip_path','bundle')))
+                    state['progress'] = tracker.summary()
+                    save_state('PARQUET_EXPORTED')
+                    refresh_parquet_pipeline_tables()
                 elif args.parquet_export != 'off':
                     state['parquet_bundle']=dict(
                         status='PARQUET_EXPORT_UNAVAILABLE',runtime=parquet_runtime)
@@ -1164,6 +1187,8 @@ def main(argv=None):
             progress('3/4 and 4/4 POSTPROCESS skipped by --skip-post.')
         state['progress'] = tracker.summary()
         save_state('COMPLETED')
+        if (state.get('parquet_bundle') or {}).get('directory'):
+            refresh_parquet_pipeline_tables()
         bundle=(state.get('parquet_bundle') or {}).get('zip_path')
         timing=state.get('pipeline_run_report') or {}
         if bundle and os.path.isfile(bundle):
