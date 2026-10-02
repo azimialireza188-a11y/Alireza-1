@@ -305,5 +305,41 @@ class PipelineTests(unittest.TestCase):
 
 
 
+    def test_build_only_never_submits_solver(self):
+        with tempfile.TemporaryDirectory() as root:
+            output=os.path.join(root,'build only')
+            class NoSubmitJob:
+                name='BuildOnly'
+                def submit(self,**kwargs):
+                    raise AssertionError('build-only attempted solver submission')
+                def waitForCompletion(self):
+                    raise AssertionError('build-only waited for solver')
+            report=dict(odb=os.path.abspath(os.path.join(output,'BuildOnly.odb')),
+                        reference_stress_MPa=1.0)
+            def fake_build(inputs,cpus,gpus=0,buckle_output='standard',nodal_precision='full'):
+                os.makedirs(output,exist_ok=True)
+                with open(os.path.join(output,'BuildOnly.cae'),'w') as stream:
+                    stream.write('CAE placeholder from mocked builder boundary')
+                with open(os.path.join(output,'BuildOnly.inp'),'w') as stream:
+                    stream.write('*HEADING\n')
+                return NoSubmitJob(),report
+            defaults={k:getattr(builder,k) for k in
+                ('BUILTUP_DIR','MESH_MM','N_MODES','N_VECTORS','MAX_ITERATIONS',
+                 'LONGITUDINAL_LINES')}
+            with mock.patch.dict(builder.__dict__,defaults), \
+                 mock.patch.object(builder,'read_model_inputs',return_value=()), \
+                 mock.patch.object(builder,'input_summary',return_value={}), \
+                 mock.patch.object(builder,'build',side_effect=fake_build), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                builder.main(['--builtup-dir',root,'--output-dir',output,'--build-only'])
+            self.assertTrue(os.path.isfile(os.path.join(output,'BuildOnly.cae')))
+            self.assertTrue(os.path.isfile(os.path.join(output,'BuildOnly.inp')))
+            with open(os.path.join(output,'pipeline_status.json')) as stream:
+                state=json.load(stream)
+            self.assertEqual(state['status'],'BUILT_ONLY')
+            self.assertFalse(state['submitted'])
+
+
+
 if __name__ == '__main__':
     unittest.main()
