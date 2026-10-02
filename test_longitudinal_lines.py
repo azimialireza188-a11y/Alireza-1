@@ -122,6 +122,29 @@ class LongitudinalLinesTests(unittest.TestCase):
             selected = self.select(2)
             self.assertEqual(len(selected - self.legacy), 2)
 
+    def test_existing_build_only_and_modal_audit_command_options_remain_accepted(self):
+        build_only = builder.parse_arguments([
+            '--mesh-mm', '20', '--n-modes', '250', '--n-vectors', '500',
+            '--max-iterations', '1250', '--cpus', '8',
+            '--longitudinal-lines', '8', '--build-only'])
+        self.assertTrue(build_only.build_only)
+        self.assertEqual(build_only.longitudinal_lines, 8)
+        self.assertEqual(build_only.longitudinal_line_min_spacing_mm, 0.0)
+
+        full = builder.parse_arguments([
+            '--mesh-mm', '5', '--n-modes', '250', '--n-vectors', '500',
+            '--max-iterations', '1250', '--cpus', '8',
+            '--buckle-output', 'detailed', '--nodal-precision', 'full',
+            '--longitudinal-lines', '2', '--modal-audit'])
+        self.assertTrue(full.modal_audit)
+        self.assertEqual(full.buckle_output, 'detailed')
+        self.assertEqual(full.nodal_precision, 'full')
+
+        spaced = builder.parse_arguments([
+            '--longitudinal-lines', '8',
+            '--longitudinal-line-min-spacing-mm', '5', '--build-only'])
+        self.assertEqual(spaced.longitudinal_line_min_spacing_mm, 5.0)
+
     def test_cli_defaults_and_valid_range(self):
         args = builder.parse_arguments([])
         self.assertEqual(getattr(args, 'longitudinal_lines', None), 0)
