@@ -40,6 +40,9 @@ import tempfile
 import threading
 import time
 
+from abaqus_progress import ProgressTracker, solver_estimate_fraction
+from abaqus_resource_policy import resolve_resource_plan
+
 # CAE noGUI executes scripts without defining __file__.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(
     globals().get('__file__', sys._getframe().f_code.co_filename)))
@@ -82,6 +85,19 @@ def validate_settings():
         raise ValueError('N_VECTORS must be at least N_MODES')
 
 
+def parse_resource_count(value, allow_zero=False):
+    text = str(value).strip().lower()
+    if text in ('auto', 'all'):
+        return None
+    try:
+        number = int(text)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError('expected auto/all or an integer')
+    if number < (0 if allow_zero else 1):
+        raise argparse.ArgumentTypeError('value must be %s' % ('nonnegative' if allow_zero else 'positive'))
+    return number
+
+
 def parse_arguments(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if '--' in argv:
@@ -113,7 +129,10 @@ def parse_arguments(argv=None):
     parser.add_argument('--n-modes', type=int, default=N_MODES)
     parser.add_argument('--n-vectors', type=int, default=None)
     parser.add_argument('--max-iterations', type=int, default=MAX_ITERATIONS)
-    parser.add_argument('--cpus', type=int, default=8)
+    parser.add_argument('--cpus', type=lambda value: parse_resource_count(value, False), default=None,
+        help='CPU count; default auto uses all detected logical CPUs. auto/all are accepted.')
+    parser.add_argument('--gpus', type=lambda value: parse_resource_count(value, True), default=None,
+        help='GPU count; default auto uses all detected supported GPUs. 0 disables GPU use.')
     parser.add_argument('--buckle-output', choices=('standard', 'detailed'), default='standard',
                         help='Legacy compatibility option. Automatic buckling now always stores classification-only nodal mode shapes; detailed no longer adds S/E/SF/SE.')
     parser.add_argument('--nodal-precision', choices=('full', 'single'), default='full',
@@ -140,8 +159,8 @@ def parse_arguments(argv=None):
         parser.error('--resume-post cannot be combined with build/check/skip/output options')
     if not math.isfinite(args.mesh_mm) or args.mesh_mm <= 0:
         parser.error('--mesh-mm must be positive and finite')
-    if min(args.n_modes, args.max_iterations, args.cpus) < 1:
-        parser.error('--n-modes, --max-iterations and --cpus must be positive')
+    if min(args.n_modes, args.max_iterations) < 1:
+        parser.error('--n-modes and --max-iterations must be positive')
     if args.n_vectors is None:
         args.n_vectors = max(N_VECTORS, min(2*args.n_modes, args.n_modes+8))
     if args.n_vectors < args.n_modes:
@@ -318,7 +337,7 @@ def progress(message):
         stream.write(line+'\n')
 
 
-def monitor_analysis(stop, job_name):
+def monitor_analysis(stop, job_name, tracker=None, expected_seconds=None):
     """File-only monitoring thread; all Abaqus API calls stay on the main thread."""
     offsets = {}
     started = time.time()
@@ -335,7 +354,13 @@ def monitor_analysis(stop, job_name):
                         progress('%s: %s' % (suffix, line.strip()))
             except (IOError, OSError):
                 pass
-        progress('Solver wait: %.0f s elapsed (no reliable percentage available).' % (time.time()-started))
+        elapsed = time.time()-started
+        if tracker is not None:
+            fraction = solver_estimate_fraction(elapsed, expected_seconds or 1800.0)
+            tracker.update(estimate_fraction=fraction,
+                           note='Abaqus solver; heuristic unless solver log exposes exact work units')
+        else:
+            progress('Solver wait: %.0f s elapsed.' % elapsed)
 
 
 def xykey(point):
@@ -639,7 +664,7 @@ def add_general_contact(model):
         assignments=((GLOBAL, SELF, 'Hard_Frictionless'),))
 
 
-def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full'):
+def build(inputs=None, cpus=8, gpus=0, buckle_output='standard', nodal_precision='full'):
     validate_settings()
     if inputs is None:
         inputs = read_model_inputs(BUILTUP_DIR)
@@ -652,7 +677,7 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     from abaqusConstants import (THREE_D, DEFORMABLE_BODY, ON, OFF, CARTESIAN,
         MIDDLE_SURFACE, FROM_SECTION, XYPLANE, XZPLANE, YZPLANE, QUAD,
         STRUCTURED, FIXED, S4R, STANDARD, SUBSPACE, SET, UNIFORM, GENERAL,
-        BEAM_MPC, DOF_MODE_MPC, MEGA_BYTES, FULL, SINGLE)
+        BEAM_MPC, DOF_MODE_MPC, PERCENTAGE, FULL, SINGLE)
     import mesh
     import regionToolset
     import interaction  # registers Model.MultipointConstraint in noGUI sessions
@@ -671,9 +696,21 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     model = mdb.Model(name=MODEL_NAME)
     assert hasattr(model, 'MultipointConstraint') and hasattr(mdb, 'Job')
     assert hasattr(model, 'fieldOutputRequests') and hasattr(model, 'historyOutputRequests')
-    job = mdb.Job(name=MODEL_NAME, model=MODEL_NAME, numCpus=cpus, numDomains=cpus,
-                  memory=24000, memoryUnits=MEGA_BYTES,
-                  nodalOutputPrecision=FULL if nodal_precision == 'full' else SINGLE)
+    job_kwargs = dict(name=MODEL_NAME, model=MODEL_NAME, numCpus=cpus, numDomains=cpus,
+                      memory=100, memoryUnits=PERCENTAGE,
+                      nodalOutputPrecision=FULL if nodal_precision == 'full' else SINGLE)
+    if gpus:
+        job_kwargs['numGPUs'] = int(gpus)
+    try:
+        job = mdb.Job(**job_kwargs)
+        used_gpus = int(gpus or 0)
+    except TypeError:
+        # Some Abaqus installations expose no numGPUs keyword on mdb.Job.
+        job_kwargs.pop('numGPUs', None)
+        job = mdb.Job(**job_kwargs)
+        used_gpus = 0
+        if gpus:
+            print('GPU fallback: this Abaqus Job API does not accept numGPUs; CPU solver remains fully enabled.')
     model.Material(name='Steel')
     model.materials['Steel'].Elastic(table=((young, poisson),))
     model.HomogeneousShellSection(name='Shell_t', material='Steel', thickness=thickness,
@@ -865,7 +902,8 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         longitudinal_line_min_spacing_mm=LONGITUDINAL_LINE_MIN_SPACING_MM,
         mandatory_longitudinal_lines=len(mandatory_keep),
         retained_section_lines=len(keep),
-        vectors=N_VECTORS, max_iterations=MAX_ITERATIONS, cpus=cpus,
+        vectors=N_VECTORS, max_iterations=MAX_ITERATIONS, cpus=cpus, gpus=used_gpus,
+        memory_percent=100,
         job_name=MODEL_NAME, odb=os.path.abspath(MODEL_NAME+'.odb'),
         nodes=4*len(part.nodes), elements=4*len(part.elements), element_type='S4R',
         bolts_per_seam=len(bolts), rigid_links=len(model.constraints),
@@ -901,7 +939,11 @@ def main(argv=None):
     N_MODES, N_VECTORS, MAX_ITERATIONS = args.n_modes, args.n_vectors, args.max_iterations
     validate_settings()
     inputs = read_model_inputs(BUILTUP_DIR)
+    resource_plan = resolve_resource_plan(args.cpus, args.gpus, work_items=args.n_modes)
     settings = vars(args).copy()
+    settings['resource_plan'] = resource_plan
+    settings['cpus_resolved'] = resource_plan['cpus']
+    settings['gpus_resolved'] = resource_plan['gpus']
     settings['effective_buckle_output'] = 'classification_only_U'
     settings['automatic_shell_energy'] = False
     if args.check_inputs:
@@ -918,6 +960,19 @@ def main(argv=None):
     os.chdir(output_dir)
     settings['output_dir'] = output_dir
     state = dict(status='BUILDING', settings=settings, source_inputs=input_summary(inputs), submitted=False)
+    stages = ['BUILD']
+    weights = [12.0]
+    if not args.build_only:
+        stages.append('SOLVE'); weights.append(58.0)
+        if processor is not None:
+            stages.extend(['ODB_POST', 'ENHANCED']); weights.extend([8.0, 8.0])
+            if args.modal_audit:
+                stages.append('MODAL_AUDIT'); weights.append(14.0)
+    run_signature = '%s|mesh=%g|modes=%d|vectors=%d' % (
+        os.path.basename(os.path.normpath(BUILTUP_DIR)), MESH_MM, N_MODES, N_VECTORS)
+    history_path = os.path.join(os.path.dirname(output_dir), '.abaqus_progress_history.json')
+    tracker = ProgressTracker(stages, weights, emit=progress, history_path=history_path,
+                              signature=run_signature)
     def save_state(status):
         state['status'] = status
         state['updated_at'] = datetime.datetime.now().isoformat()
@@ -930,18 +985,22 @@ def main(argv=None):
             stream.write('standard_parallel = SOLVER\n')
         progress('Output directory: '+output_dir)
         progress('Settings: '+json.dumps(settings, sort_keys=True))
-        progress('1/4 BUILD: geometry, mesh, contact, CAE and INP.')
+        tracker.start('BUILD')
+        progress('BUILD: geometry, mesh, contact, CAE and INP.')
         if args.buckle_output == 'detailed':
             progress('NOTE: --buckle-output detailed is retained only for command compatibility; S/E/SF/SE are no longer requested in this buckling stage.')
-        job, report = build(inputs=inputs, cpus=args.cpus,
+        job, report = build(inputs=inputs, cpus=resource_plan['cpus'], gpus=resource_plan['gpus'],
                             buckle_output=args.buckle_output, nodal_precision=args.nodal_precision)
         state['build'] = report
+        tracker.finish('BUILD', note='CAE and INP saved')
+        state['progress'] = tracker.summary()
         save_state('BUILT')
         if args.build_only:
             progress('BUILD_ONLY complete. CAE and INP saved; solver not submitted.')
             return state
         from abaqusConstants import ON
-        progress('2/4 SOLVE: submitting '+job.name)
+        tracker.start('SOLVE')
+        progress('SOLVE: submitting '+job.name)
         job.submit(consistencyChecking=ON)
         report['submitted'] = True
         state['submitted'] = True
@@ -949,7 +1008,9 @@ def main(argv=None):
             json.dump(report, stream, indent=2)
         save_state('SOLVING')
         stop = threading.Event()
-        monitor = threading.Thread(target=monitor_analysis, args=(stop, job.name))
+        expected_solver = tracker.historical_seconds('SOLVE', 1800.0)
+        monitor = threading.Thread(target=monitor_analysis,
+                                   args=(stop, job.name, tracker, expected_solver))
         monitor.daemon = True
         monitor.start()
         try:
@@ -963,22 +1024,31 @@ def main(argv=None):
         state['solver_status'] = 'COMPLETED'
         if not os.path.isfile(report['odb']):
             raise RuntimeError('Solver completed but expected ODB is missing: '+report['odb'])
+        tracker.finish('SOLVE', note='verified solver completion')
+        state['progress'] = tracker.summary()
         save_state('SOLVED')
         progress('Solver completed successfully: '+state['completion_evidence'])
         if processor is not None:
             save_state('POSTPROCESSING')
-            progress('3/4 POSTPROCESS: all modes from '+report['odb'])
+            tracker.start('ODB_POST')
+            progress('POSTPROCESS: all modes from '+report['odb'])
             state['postprocessing'] = processor.main(postprocess_arguments(report))
+            tracker.finish('ODB_POST', note='%d modes processed' % state['postprocessing']['processed_modes'])
             if state['postprocessing']['available_modes'] < N_MODES:
                 progress('WARNING: fewer modes available than requested; see modal report.')
             save_state('ENHANCED_POSTPROCESSING')
-            progress('4/4 ENHANCED: mode families, spectra, envelopes and interactive report.')
+            tracker.start('ENHANCED')
+            progress('ENHANCED: mode families, spectra, envelopes and interactive report.')
             state['enhanced_report'] = enhanced.main(enhanced_arguments(report))
+            tracker.finish('ENHANCED')
             if args.modal_audit:
+                tracker.start('MODAL_AUDIT')
                 progress('AUDIT: direct shapes, sensitivity and graphical explorer.')
                 state['modal_audit'] = run_modal_audit(output_dir)
+                tracker.finish('MODAL_AUDIT')
         else:
             progress('3/4 and 4/4 POSTPROCESS skipped by --skip-post.')
+        state['progress'] = tracker.summary()
         save_state('COMPLETED')
         progress('COMPLETE: '+output_dir)
         return state
