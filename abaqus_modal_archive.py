@@ -74,7 +74,8 @@ def extract_modal_archive(odb, metadata, output_path):
     step_name = meta.get('step', 'Buckle')
     if step_name not in odb.steps:
         raise ValueError('ODB is missing step: '+step_name)
-    names = sorted(odb.rootAssembly.instances)
+    # Abaqus odbAccess.Repository exposes keys()/getitem but is not iterable.
+    names = sorted(list(odb.rootAssembly.instances.keys()))
     node_keys, coordinates = [], []
     for name in names:
         for node in sorted(odb.rootAssembly.instances[name].nodes, key=lambda n: int(n.label)):
