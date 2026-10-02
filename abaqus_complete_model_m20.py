@@ -635,6 +635,7 @@ def input_summary(data):
                         for k in sorted(pieces)}
     return dict(source_directory=os.path.abspath(BUILTUP_DIR),
         section_segments=section_segments,
+        seams=[[float(v) for v in row] for row in seams],
         section_geometry_definition='original builtup_segments.csv in global section coordinates',
         length_mm=float(member['L_mm']), thickness_mm=thickness,
         E_MPa=young, nu=poisson, clear_gap_mm=float(member['gap_mm']),
