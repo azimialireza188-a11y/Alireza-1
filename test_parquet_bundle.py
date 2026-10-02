@@ -77,6 +77,35 @@ class ParquetBundleTests(unittest.TestCase):
         hs=tables['harmonic_sections'].to_pydict()
         self.assertTrue(all(x>=.001 for x in hs['harmonic_share']))
 
+    def test_pipeline_report_is_embedded_as_parquet_tables(self):
+        report=dict(
+            status='COMPLETED',started_at='2026-10-02T10:00:00+00:00',
+            updated_at='2026-10-02T10:10:00+00:00',total_elapsed_seconds=600.,
+            invocation=dict(normalized_command='abaqus cae noGUI=x.py -- --modal-audit',
+                            effective_args=['--modal-audit'],git_commit='abc123',
+                            launch_cwd='D:/run',process_argv=['abaqus','cae']),
+            resource_plan=dict(cpus=24,gpus=1),
+            effective_settings=dict(mesh_mm=5,n_modes=250),
+            submitted=True,solver_status='COMPLETED',
+            stages=[
+                dict(scope='PIPELINE',parent_stage=None,stage='SOLVE',
+                     status='COMPLETED',weight_percent=58.,duration_seconds=480.,
+                     started_at='a',finished_at='b'),
+                dict(scope='MODAL_AUDIT',parent_stage='MODAL_AUDIT',stage='CLASSIFY',
+                     status='COMPLETED',weight_percent=None,duration_seconds=20.,
+                     started_at=None,finished_at=None)],
+            outputs={'Job.odb':dict(bytes=123456,modified_at='x')})
+        tables=p.pipeline_report_tables(report)
+        self.assertEqual(tables['pipeline_run'].num_rows,1)
+        self.assertEqual(tables['pipeline_stages'].num_rows,2)
+        self.assertEqual(tables['pipeline_outputs'].num_rows,1)
+        row=tables['pipeline_run'].to_pydict()
+        self.assertIn('abaqus cae',row['normalized_command'][0])
+        self.assertEqual(row['git_commit'][0],'abc123')
+        stages=tables['pipeline_stages'].to_pydict()
+        self.assertIn('SOLVE',stages['stage'])
+        self.assertIn('CLASSIFY',stages['stage'])
+
     def test_bundle_writes_zstd_parquet_manifest_and_single_upload_zip(self):
         tables=p.analysis_tables(
             self.summary(),self.reference(),[self.mapped_mode()],[self.harmonic()],
