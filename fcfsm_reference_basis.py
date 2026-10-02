@@ -279,9 +279,18 @@ def build_fcfsm_basis(reference, harmonic_n, bc='S-S'):
         raise ValueError('harmonic_n must be a positive integer')
     k0,jgd,eq=_reference_operators(reference,m,bc)
     key=basis_cache_key(reference['definition_hash'],m,bc)
-    metadata=dict(method='whole-built-up fcFSM force basis', harmonic_n=m, bc=str(bc).upper(),
-                  reference_hash=reference['definition_hash'],
-                  cross_gap_constraints='none', equilibrium_rows=['Fx','Fy','M'])
+    metadata=dict(
+        method='whole-built-up fcFSM force basis',
+        harmonic_n=m,
+        bc=str(bc).upper(),
+        reference_hash=reference['definition_hash'],
+        reference_version=reference.get('version'),
+        plate_definition=reference.get('plate_definition'),
+        plate_definition_version=reference.get('plate_definition_version'),
+        plate_count=len(reference.get('plate_groups',[])),
+        corner_element_count=len(reference.get('corner_elements',[])),
+        cross_gap_constraints='none',
+        equilibrium_rows=['Fx','Fy','M'])
     metadata['thickness_mm']=float(reference['material']['thickness_mm'])
     result=force_family_basis(k0,jgd,eq,definition_hash=key,metadata=metadata)
     result.equilibrium=eq
