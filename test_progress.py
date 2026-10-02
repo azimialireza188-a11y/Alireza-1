@@ -63,5 +63,22 @@ class ProgressTests(unittest.TestCase):
         self.assertAlmostEqual(s['elapsed_seconds'], 5.0)
 
 
+    def test_summary_records_completed_stage_durations(self):
+        now=[0.0]
+        tracker=p.ProgressTracker(['extract','classify'],[1,1],
+                                  emit=lambda unused:None,clock=lambda:now[0])
+        tracker.start('extract')
+        now[0]=3.5
+        tracker.finish('extract')
+        tracker.start('classify')
+        now[0]=8.0
+        tracker.finish('classify')
+        summary=tracker.summary()
+        self.assertEqual(summary['stage_durations_seconds'],
+                         {'extract':3.5,'classify':4.5})
+        self.assertAlmostEqual(summary['elapsed_seconds'],8.0)
+
+
+
 if __name__ == '__main__':
     unittest.main()
