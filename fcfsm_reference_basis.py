@@ -10,14 +10,20 @@ import hashlib
 import json
 import math
 import numpy as np
-from scipy.linalg import null_space
 
 
 def _null(a, rcond=1e-10):
     a = np.asarray(a, dtype=float)
+    if a.ndim != 2:
+        raise ValueError('Null-space operator requires a 2-D matrix')
     if a.size == 0:
         return np.eye(a.shape[1], dtype=float)
-    return null_space(a, rcond=rcond)
+    unused_u, singular, vt = np.linalg.svd(a, full_matrices=True)
+    if not len(singular):
+        return np.eye(a.shape[1], dtype=float)
+    tolerance=float(rcond)*float(singular[0])
+    rank=int(np.sum(singular > tolerance))
+    return vt[rank:].T
 
 
 class EnergeticSolver(object):
