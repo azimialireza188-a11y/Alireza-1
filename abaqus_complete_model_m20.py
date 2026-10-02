@@ -1070,7 +1070,8 @@ def main(argv=None):
             output_dir,tracker,invocation,state,pipeline_started_epoch,status)
         state['pipeline_run_report']=dict(
             json_path=report_info['json_path'],
-            csv_path=report_info['csv_path'])
+            csv_path=report_info['csv_path'],
+            replay_path=report_info['replay_path'])
 
     def refresh_parquet_pipeline_tables():
         bundle=state.get('parquet_bundle') or {}
@@ -1193,7 +1194,8 @@ def main(argv=None):
         timing=state.get('pipeline_run_report') or {}
         if bundle and os.path.isfile(bundle):
             pipeline_run_report.append_final_report_to_zip(
-                bundle,timing.get('json_path'),timing.get('csv_path'))
+                bundle,timing.get('json_path'),timing.get('csv_path'),
+                timing.get('replay_path'))
         progress('COMPLETE: '+output_dir)
         return state
     except Exception as error:
