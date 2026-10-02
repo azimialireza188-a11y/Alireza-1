@@ -180,5 +180,12 @@ class ModalAuditTests(unittest.TestCase):
         self.assertIn('classify_modes_parallel',source)
 
 
+    def test_automatic_basis_orchestration_uses_hash_keyed_cache(self):
+        source=inspect.getsource(audit._automatic_mechanical_classification)
+        self.assertIn('get_fcfsm_basis',source)
+        self.assertNotIn('build_fcfsm_basis(reference',source)
+
+
+
 if __name__ == '__main__':
     unittest.main()
