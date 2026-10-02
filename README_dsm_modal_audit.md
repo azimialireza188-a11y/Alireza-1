@@ -72,9 +72,9 @@ seam motion = diagnostic مستقل
 در زمان اجرا پیام `PROGRESS` مرحلهٔ جاری، درصد stage و overall، `done/total`، نرخ، elapsed، ETA و stageهای باقی‌مانده را نشان می‌دهد. درصد حل Abaqus در جایی که counter قابل اتکا وجود نداشته باشد با `ESTIMATED` مشخص می‌شود و پیش از تأیید completion هرگز 100% نمی‌شود.
 
 
-## اصلاح مرز Local / Distortional در عضو built-up
+## مسیر legacy هندسی: اصلاح مرز Local / Distortional در عضو built-up
 
-نسخهٔ فعلی Local را دیگر «باقی‌مانده بعد از Distortional» تعریف نمی‌کند. این تغییر به‌دلیل مشاهدهٔ مستقیم مودهایی مانند 120 mm و 300 mm انجام شد که خمیدگی واضح داخل wall داشتند ولی روش coarse-anchor بیش از 90٪ آن‌ها را D می‌خواند.
+این بخش روش **geometric screening legacy** را مستند می‌کند؛ در ODB جدید دارای U+UR نتیجهٔ اصلی Stage A از K0/fcFSM می‌آید. در همین screening هندسی، Local دیگر «باقی‌مانده بعد از Distortional» تعریف نمی‌شود. این تغییر به‌دلیل مشاهدهٔ مستقیم مودهایی مانند 120 mm و 300 mm انجام شد که خمیدگی واضح داخل wall داشتند ولی روش coarse-anchor بیش از 90٪ آن‌ها را D می‌خواند.
 
 در اجرای یک‌مرحله‌ای، سازندهٔ مدل هندسهٔ اصلی `builtup_segments.csv` را داخل `*_build.json` ذخیره می‌کند. post-processor از همین هندسه برای تشخیص **physical walls** و foldهای واقعی استفاده می‌کند؛ بنابراین گره‌های متعدد روی corner radius دیگر fold مستقل محسوب نمی‌شوند.
 
