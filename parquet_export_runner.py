@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Resolve and run the compact Parquet exporter without requiring PyArrow in Abaqus."""
 from __future__ import print_function
+import argparse
 import json
 import os
 import shutil
@@ -10,11 +11,42 @@ import sys
 import modal_analysis_parquet as bundle
 
 
+def _external_env(command=None):
+    """Remove Abaqus Python variables before launching a normal Python."""
+    env=dict(os.environ)
+    for name in (
+        'PYTHONHOME','PYTHONPATH','PYTHONSTARTUP','PYTHONNOUSERSITE',
+        'PYTHONUSERBASE','PYTHONEXECUTABLE','PYTHONPLATLIBDIR','PYTHONSAFEPATH'):
+        env.pop(name,None)
+    if command:
+        executable=os.path.abspath(str(command[0]))
+        bindir=os.path.dirname(executable)
+        dlls=os.path.join(bindir,'DLLs')
+        prefix=[bindir]
+        if os.path.isdir(dlls):
+            prefix.append(dlls)
+        current=env.get('PATH','')
+        env['PATH']=os.pathsep.join(prefix+([current] if current else []))
+    return env
+
+
+def _format_attempts(attempts):
+    lines=[]
+    for item in attempts or []:
+        if item.get('kind')=='in_process':
+            target=item.get('python') or '<Abaqus Python>'
+        else:
+            target=' '.join(str(x) for x in (item.get('command') or []))
+        lines.append('%s: %s' % (target,item.get('detail') or 'unavailable'))
+    return '\n'.join(lines)
+
+
 def _probe_external(command):
     cmd=list(command)+['-c','import pyarrow; print(pyarrow.__version__)']
     try:
-        result=subprocess.run(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                              text=True,timeout=20)
+        result=subprocess.run(
+            cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+            text=True,timeout=20,env=_external_env(command))
     except Exception as exc:
         return dict(ok=False,error='%s: %s' % (type(exc).__name__,exc))
     if result.returncode:
@@ -74,9 +106,13 @@ def prepare_runtime(policy='auto',preferred=None):
     result=find_runtime(preferred)
     result['policy']=policy
     if not result.get('available') and policy=='required':
+        details=_format_attempts(result.get('attempts'))
         raise RuntimeError(
-            'Parquet export is required but no Python runtime with PyArrow was found. '
-            'Install it before the Abaqus run with: python -m pip install pyarrow')
+            'Parquet export is required but no usable Python/PyArrow runtime was found. '
+            'The external Python probe is launched with Abaqus PYTHONHOME/PYTHONPATH '
+            'removed. Attempts:\n%s\n'
+            'If needed, verify the explicit interpreter directly with: '
+            '<python.exe> -c "import pyarrow; print(pyarrow.__version__)"' % details)
     return result
 
 
@@ -92,8 +128,9 @@ def refresh_pipeline_tables(bundle_directory,report_path,runtime):
             '--refresh-pipeline-only',
             '--bundle-dir',os.path.abspath(bundle_directory),
             '--pipeline-report',os.path.abspath(report_path)]
-        completed=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                                 text=True)
+        completed=subprocess.run(
+            command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+            text=True,env=_external_env(command))
         if completed.returncode:
             raise RuntimeError('External pipeline Parquet refresh failed: '+
                                (completed.stderr or completed.stdout or 'unknown error').strip())
@@ -125,8 +162,9 @@ def export_run(run_dir,audit_dir,runtime,output_root=None,
             '--harmonic-section-min-share',str(float(harmonic_section_min_share))]
         if output_root:
             command.extend(['--output-root',os.path.abspath(output_root)])
-        completed=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                                 text=True)
+        completed=subprocess.run(
+            command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+            text=True,env=_external_env(command))
         if completed.returncode:
             raise RuntimeError('External Parquet exporter failed: '+
                                (completed.stderr or completed.stdout or 'unknown error').strip())
@@ -139,3 +177,17 @@ def export_run(run_dir,audit_dir,runtime,output_root=None,
     result['status']='EXPORTED'
     result['runtime']=dict((k,v) for k,v in runtime.items() if k!='attempts')
     return result
+
+
+def main(argv=None):
+    parser=argparse.ArgumentParser(
+        description='Diagnose the Python/PyArrow runtime visible from Abaqus Python')
+    parser.add_argument('--python',dest='preferred_python')
+    args=parser.parse_args(argv)
+    result=find_runtime(args.preferred_python)
+    print(json.dumps(result,indent=2,sort_keys=True))
+    return 0 if result.get('available') else 2
+
+
+if __name__=='__main__':
+    raise SystemExit(main())
