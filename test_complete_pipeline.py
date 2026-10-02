@@ -35,6 +35,22 @@ class PipelineTests(unittest.TestCase):
         explicit = builder.parse_arguments(['--cpus', '8', '--gpus', '0'])
         self.assertEqual((explicit.cpus, explicit.gpus), (8, 0))
 
+    def test_parquet_export_cli_defaults_to_auto_and_supports_required_runtime(self):
+        auto=builder.parse_arguments(['--modal-audit'])
+        self.assertEqual(auto.parquet_export,'auto')
+        self.assertAlmostEqual(auto.parquet_harmonic_min_share,.001)
+        required=builder.parse_arguments([
+            '--modal-audit','--parquet-export','required',
+            '--parquet-python',r'C:\\Python311\\python.exe',
+            '--parquet-harmonic-min-share','0.002'])
+        self.assertEqual(required.parquet_export,'required')
+        self.assertTrue(required.parquet_python.endswith('python.exe'))
+        self.assertAlmostEqual(required.parquet_harmonic_min_share,.002)
+
+    def test_required_parquet_without_modal_audit_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            builder.parse_arguments(['--parquet-export','required'])
+
     def test_full_run_command_accepts_longitudinal_lines_with_modal_options(self):
         args = builder.parse_arguments(['--mesh-mm', '5', '--n-modes', '250',
             '--n-vectors', '500', '--max-iterations', '1250', '--cpus', '8',
