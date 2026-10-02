@@ -45,6 +45,7 @@ def _canonical_piece_records(section_segments):
 
 PLATE_DEFINITION = 'fcFSM parallel-adjacent flat strips excluding curved-corner strips'
 PLATE_DEFINITION_VERSION = 'fcfsm_parallel_adjacent_v1'
+CORNER_DEFINITION_VERSION = 'circular_same_sign_bend_v1'
 
 
 def _parallel(a, b, tolerance=1e-4):
@@ -55,6 +56,67 @@ def _parallel(a, b, tolerance=1e-4):
     ua=a/na; ub=b/nb
     return bool(np.max(np.abs(ua-ub)) < tolerance or
                 np.max(np.abs(ua+ub)) < tolerance)
+
+
+def _circular_corner_element_indices(points, minimum_total_turn_deg=30.0,
+                                     radial_tolerance=2e-3):
+    """Identify discretized circular bends independent of bend radius.
+
+    A CUFSM cornerStrip is a strip belonging to a curved corner. Source bends
+    are circular, while optimized leg waviness is not assumed to be a corner.
+    Candidate same-sign turning runs are therefore accepted only when their
+    interior strip nodes fit one circle to a tight relative radial tolerance.
+    """
+    p=np.asarray(points,dtype=float)
+    if len(p)<4:
+        return set()
+    vectors=np.diff(p,axis=0)
+    lengths=np.linalg.norm(vectors,axis=1)
+    if np.any(lengths<=0):
+        raise ValueError('Corner detection requires nonzero source segments')
+    turn=np.arctan2(vectors[:-1,0]*vectors[1:,1]-vectors[:-1,1]*vectors[1:,0],
+                    np.sum(vectors[:-1]*vectors[1:],axis=1))
+    active=np.abs(turn)>1e-7
+    runs=[]; current=[]
+    for j,value in enumerate(turn):
+        if not active[j]:
+            if current:
+                runs.append(current); current=[]
+            continue
+        if current and value*turn[current[-1]]<=0:
+            runs.append(current); current=[]
+        current.append(j)
+    if current:
+        runs.append(current)
+
+    corner=set()
+    minimum=math.radians(float(minimum_total_turn_deg))
+    for run in runs:
+        if abs(float(np.sum(turn[run]))) < minimum:
+            continue
+        first=run[0]+1
+        last=run[-1]  # inclusive element index; excludes tangent straight strips
+        if last < first:
+            continue  # a single sharp vertex has no finite-radius corner strip
+        arc_points=p[first:last+2]
+        if len(arc_points)<3:
+            continue
+        x=arc_points[:,0]; y=arc_points[:,1]
+        A=np.column_stack((x,y,np.ones(len(arc_points))))
+        rhs=-(x*x+y*y)
+        coef,unused_resid,rank,unused_s=np.linalg.lstsq(A,rhs,rcond=None)
+        if rank<3:
+            continue
+        center=-.5*coef[:2]
+        radius2=float(center@center-coef[2])
+        if radius2<=0 or not math.isfinite(radius2):
+            continue
+        radius=math.sqrt(radius2)
+        radial=np.linalg.norm(arc_points-center[None,:],axis=1)
+        error=float(np.max(np.abs(radial-radius)))/max(radius,1e-250)
+        if error <= float(radial_tolerance):
+            corner.update(range(first,last+1))
+    return corner
 
 
 def _fcfsm_plate_groups(points, element_ids, corner_ids, piece):
@@ -87,6 +149,7 @@ def _hash_payload(records, thickness_mm, E_MPa, nu, length_mm):
     payload = dict(
         version='builtup_reference_v2',
         plate_definition_version=PLATE_DEFINITION_VERSION,
+        corner_definition_version=CORNER_DEFINITION_VERSION,
         pieces=[[[round(float(x), 12) for x in p] for p in r['points']] for r in records],
         thickness_mm=round(float(thickness_mm), 12),
         E_MPa=round(float(E_MPa), 8),
@@ -135,10 +198,14 @@ def build_reference_section(section_segments, thickness_mm, E_MPa, nu, length_mm
                                  length_mm=float(np.linalg.norm(points[i+1]-points[i])),
                                  thickness_mm=float(thickness_mm), corner=False))
             element_id += 1
+        corner_local=set()
         for lo, hi in layout['bends']:
-            for i in range(int(lo), int(hi)):
-                if 0 <= i < len(local_element_ids):
-                    corner_ids.add(local_element_ids[i])
+            corner_local.update(i for i in range(int(lo),int(hi))
+                                if 0 <= i < len(local_element_ids))
+        corner_local.update(_circular_corner_element_indices(points))
+        for i in sorted(corner_local):
+            if 0 <= i < len(local_element_ids):
+                corner_ids.add(local_element_ids[i])
         plate_groups.extend(_fcfsm_plate_groups(
             points,local_element_ids,corner_ids,piece))
         piece_info.append(dict(name=piece, original_name=record['original'],
@@ -165,6 +232,7 @@ def build_reference_section(section_segments, thickness_mm, E_MPa, nu, length_mm
         version='builtup_reference_v2',
         plate_definition=PLATE_DEFINITION,
         plate_definition_version=PLATE_DEFINITION_VERSION,
+        corner_definition_version=CORNER_DEFINITION_VERSION,
         pieces=piece_info,
         nodes=nodes,
         elements=elements,
