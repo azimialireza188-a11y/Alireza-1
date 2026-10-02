@@ -480,6 +480,38 @@ The implementation shall use an aggressive resource profile by default. The code
 
 Every run records detected and used logical CPU count, process/BLAS layout, host-memory request, detected/used GPU count and backend, resource fallbacks, and wall-clock timing for ODB extraction, harmonic decomposition, basis construction/cache, classification and reporting.
 
+## 19.2 Runtime progress, remaining work, and ETA reporting
+
+Every long-running execution path must report progress continuously enough that the operator can tell:
+
+- the current named stage;
+- estimated overall percent complete;
+- exact completed/total work units when the stage exposes countable units;
+- the major stages still remaining;
+- elapsed wall time;
+- ETA / estimated time remaining when a defensible estimate is available.
+
+The progress system distinguishes exact counters from estimates. It must never present a heuristic solver percentage as exact.
+
+Required stages for the full one-command workflow are:
+
+1. input validation / output-directory preparation;
+2. CAE model build and mesh;
+3. INP/CAE write;
+4. Abaqus eigenbuckling solve;
+5. ODB U/UR extraction;
+6. canonical reference/K0 and basis load/build;
+7. harmonic decomposition;
+8. mechanical classification plus Assembly/seam diagnostics;
+9. eigenspace/validation aggregation;
+10. plots/CSV/JSON/HTML reporting.
+
+For deterministic loops such as modes/harmonics, report `done/total`, percentage, processing rate, and ETA from measured throughput.
+
+For Abaqus solver waiting, consume any trustworthy progress evidence available from solver status/log files. If Abaqus exposes no reliable completed-unit count, report a clearly labeled estimated percentage using historical timing for the same physical/numerical signature when available, with a conservative bounded fallback on first runs. The estimate must be monotonic, must not reach 100% before verified solver completion, and must be labeled `ESTIMATED`.
+
+Progress messages must remain useful under aggressive parallel execution: one coordinator emits aggregate progress instead of every worker flooding stdout.
+
 ## 20. Validation strategy
 
 Stage A is not considered scientifically usable until all of the following pass.
@@ -582,3 +614,4 @@ The rewrite is complete only when all of the following are true:
 14. Synthetic, CUFSM/fcFSM, built-up and mesh-validation tests are present.
 15. The output plot style continues to show actual piece-wise mode shapes comparable to the supplied `mode_sections.png`, with mechanical and diagnostic annotations separated.
 16. The default resource policy aggressively uses all detected CPU capacity, requests maximum supported Abaqus memory, uses supported GPUs when numerically valid, and imposes no artificial CPU/RAM reserve.
+17. During long runs the operator sees current stage, estimated overall percent, exact done/total where available, remaining stages, elapsed time and ETA/remaining-time information; estimated solver progress is explicitly labeled.
