@@ -146,8 +146,7 @@ class ProgressTracker(object):
                 eta = elapsed * (1.0 - self.stage_fraction) / self.stage_fraction
         row = self._row(now, estimated=estimated, done=done, total=total,
                         rate=rate, eta=eta, note=note)
-        self.emit(self._format(row))
-        return row
+        return self._publish(row)
 
     def finish(self, stage=None, note=None):
         if self.stage is None:
@@ -159,7 +158,7 @@ class ProgressTracker(object):
         self.stage_durations[self.stage] = max(0.0, now - self.stage_started)
         self.completed.add(self.stage_index)
         row = self._row(now, note=note)
-        self.emit(self._format(row))
+        self._publish(row)
         self._save_history(now)
         return row
 
