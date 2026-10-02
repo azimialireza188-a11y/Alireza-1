@@ -21,6 +21,7 @@ import json
 import math
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 FAMILIES = ('L', 'D', 'G')
@@ -37,7 +38,8 @@ from fcfsm_reference_basis import build_fcfsm_basis
 from abaqus_modal_harmonics import decompose_mode
 from assembly_projector import assembly_diagnostics, seam_relative_diagnostics
 from mechanical_modal_classifier import classify_modes_parallel, classify_eigenspace
-from abaqus_resource_policy import resolve_resource_plan
+from abaqus_resource_policy import resolve_resource_plan, apply_blas_thread_env
+from abaqus_progress import ProgressTracker
 
 
 def mechanical_classification_state(fields):
@@ -493,6 +495,168 @@ def close_clusters(rows, tolerance):
             groups.append([])
         groups[-1].append(row)
     return groups
+
+
+def _audit_progress(message):
+    print(message)
+    sys.stdout.flush()
+
+
+def _automatic_mechanical_classification(archive_path, reference, geometric_rows,
+                                         metadata, sigma, cluster_tolerance):
+    """Classify numeric U/UR archive after ODB extraction has finished."""
+    total=len(geometric_rows)
+    if total < 1:
+        raise ValueError('Mechanical audit requires at least one mode')
+    tracker=ProgressTracker(
+        ['MAP_HARMONICS','BASIS','CLASSIFY','EIGENSPACE'],
+        [35.,20.,35.,10.],emit=_audit_progress)
+    mapped=[]; harmonics=[]; diagnostics_rows=[]
+    tracker.start('MAP_HARMONICS')
+    with open_modal_archive(archive_path) as archive:
+        if len(archive) != total:
+            raise ValueError('Modal archive and geometric report mode counts differ')
+        for i,row in enumerate(geometric_rows):
+            item=map_mode_to_reference(archive,i,reference)
+            if int(item['mode']) != int(row['mode']):
+                raise ValueError('Modal archive order differs from base modal report')
+            if not np.isclose(item['eigenvalue'],row['eigenvalue'],rtol=1e-7,atol=1e-8):
+                raise ValueError('Modal archive eigenvalue differs from base modal report')
+            if len(item['z']) < 5:
+                raise ValueError('At least five longitudinal stations are required for mechanical harmonics')
+            requested=int(metadata.get('max_resolved_halfwaves') or (len(item['z'])-2))
+            max_harmonic=max(1,min(requested,len(item['z'])-2))
+            h=decompose_mode(item['z'],item['U'],item['UR'],
+                             reference['length_mm'],max_harmonic,bc='S-S')
+            scale=float(reference['material']['thickness_mm'])/math.sqrt(12.0)
+            amplitude=np.sum(item['U']*item['U'],axis=(1,2))+scale*scale*np.sum(item['UR']*item['UR'],axis=(1,2))
+            peak=int(np.argmax(amplitude))
+            section=dict(U=item['U'][peak],UR=item['UR'][peak])
+            diag=assembly_diagnostics(section,reference)
+            diag.update(seam_relative_diagnostics(section,reference))
+            # Force-resultant interaction is deliberately not fabricated from
+            # kinematics. A later force-recovery implementation may populate it.
+            diag['interpiece_interaction_percent']=None
+            diag['interpiece_interaction_status']='UNAVAILABLE_NO_FORCE_RECOVERY'
+            mapped.append(item); harmonics.append(h); diagnostics_rows.append(diag)
+            tracker.update(done=i+1,total=total,
+                           note='mapped mode %s; peak z=%.6g mm' % (item['mode'],item['z'][peak]))
+    tracker.finish('MAP_HARMONICS')
+
+    # Remove only numerical harmonic dust. Use one global retained set so every
+    # observed eigenspace has a common K0-energy coordinate layout.
+    share_floor=1e-6
+    retained=set()
+    for h in harmonics:
+        for m,share in enumerate(h['shares'],1):
+            if float(share) >= share_floor:
+                retained.add(m)
+        retained.add(int(h['dominant_m']))
+    retained=sorted(retained)
+    if not retained:
+        raise ValueError('No longitudinal harmonics retained for mechanical classification')
+    for h in harmonics:
+        omitted=sum(float(share) for m,share in enumerate(h['shares'],1) if m not in retained)
+        h['components']={m:h['components'][m] for m in retained}
+        h['relative_residual']=math.sqrt(min(1.0,float(h.get('relative_residual',0.0))**2+max(0.0,omitted)))
+        h['retained_harmonics']=list(retained)
+        h['harmonic_share_floor']=share_floor
+
+    resource_plan=resolve_resource_plan(work_items=max(len(retained),total))
+    apply_blas_thread_env(resource_plan['worker_layout'])
+    tracker.start('BASIS')
+    basis_cache={}
+    workers=max(1,int(resource_plan['worker_layout']['processes']))
+    def build_one(m):
+        return m,build_fcfsm_basis(reference,m,bc='S-S')
+    if workers == 1 or len(retained) == 1:
+        for i,m in enumerate(retained,1):
+            unused,basis=build_one(m); basis_cache[m]=basis
+            tracker.update(done=i,total=len(retained),note='harmonic m=%d' % m)
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers,len(retained))) as pool:
+            futures={pool.submit(build_one,m):m for m in retained}
+            completed=0
+            for future in as_completed(futures):
+                m,basis=future.result(); basis_cache[m]=basis; completed+=1
+                tracker.update(done=completed,total=len(retained),note='harmonic m=%d' % m)
+    tracker.finish('BASIS')
+
+    settings=dict(
+        dominance=.90,max_mechanical_residual=.05,max_harmonic_residual=.05,
+        assembly_warning_percent=15.,assembly_unresolved_percent=25.,
+        metric_sensitivity_percentage_points=10.)
+    records=[]
+    for row,h,diag in zip(geometric_rows,harmonics,diagnostics_rows):
+        records.append(dict(
+            mode_record=dict(mode=row['mode'],eigenvalue=row['eigenvalue'],
+                             stress_MPa=(row['eigenvalue']*sigma if sigma else None)),
+            harmonic_result=h,basis_provider=basis_cache,diagnostics=diag))
+    tracker.start('CLASSIFY')
+    mechanical_rows=classify_modes_parallel(
+        records,settings,resource_plan,
+        progress=lambda done,count: tracker.update(done=done,total=count,
+                                                   note='mechanical modal projection'))
+    tracker.finish('CLASSIFY')
+
+    tracker.start('EIGENSPACE')
+    groups=close_clusters(mechanical_rows,cluster_tolerance)
+    isolation=validation.spectral_isolation(groups,cluster_tolerance)
+    clusters=[]
+    completed=0
+    for cluster_id,(members,gap) in enumerate(zip(groups,isolation),1):
+        for row in members:
+            row['spectral_isolated']=bool(gap['isolated'])
+        components={name:np.column_stack([row['_metric_components'][name] for row in members])
+                    for name in ('L','D','G','O')}
+        try:
+            eig=classify_eigenspace(members,components,settings)
+        except ValueError as exc:
+            eig=dict(family='UNRESOLVED',flags=['EIGENSPACE_BOUNDS_FAILED'],
+                     error=str(exc),modes=[row.get('mode') for row in members],
+                     spectral_isolated=bool(gap['isolated']))
+        bounds={k:eig[k] for k in ('min_percent','max_percent','mean_percent',
+                                   'O_min_percent','O_max_percent','O_mean_percent',
+                                   'stable_family','dimension') if k in eig}
+        stable=eig.get('family','UNRESOLVED')
+        clusters.append(dict(cluster_id=cluster_id,modes=[r['mode'] for r in members],
+                             eigenvalue_range=[members[0]['eigenvalue'],members[-1]['eigenvalue']],
+                             family=stable,bounds=bounds,spectral_isolation=gap,
+                             flags=list(eig.get('flags') or []),
+                             convention='K0-energy eigenspace bounds; invariant to eigenvector rotation/scale'))
+        for row in members:
+            prior=row['family']
+            row['cluster_id']=cluster_id
+            row['eigenspace_stable_family']=stable
+            row['eigenspace_bounds']=bounds
+            if len(members)>1:
+                row['flags']=sorted(set(row['flags']+['NEAR_REPEATED_EIGENSPACE_SEE_CLUSTER_BOUNDS']))
+            if stable=='UNRESOLVED':
+                row['family']='UNRESOLVED'; row['quality_state']='UNRESOLVED'
+                row['mechanical_eligible']=False
+            elif len(members)>1 and stable in ('LOCAL','DISTORTIONAL','GLOBAL'):
+                row['family']=stable
+                row['mechanical_eligible']=bool(prior==stable and row.get('quality_state')!='UNRESOLVED')
+            if gap.get('upper_boundary_open'):
+                row['flags']=sorted(set(row['flags']+['UPPER_SPECTRUM_BOUNDARY_NOT_CLOSED']))
+                row['mechanical_eligible']=False
+        completed+=len(members)
+        tracker.update(done=completed,total=total,note='cluster %d' % cluster_id)
+    tracker.finish('EIGENSPACE')
+    basis_meta=dict(
+        method='FCFSM_K0_ENERGY',
+        family_definition_id=reference['definition_hash'],
+        reference_hash=reference['definition_hash'],
+        cross_gap_constraints='none',
+        bolt_metadata_in_definition=False,
+        retained_harmonics=retained,
+        harmonic_share_floor=share_floor,
+        basis_hashes={str(m):basis_cache[m].definition_hash for m in retained},
+        resource_plan=resource_plan,
+        interpiece_interaction_status='UNAVAILABLE_NO_FORCE_RECOVERY')
+    return mechanical_rows,clusters,basis_meta,resource_plan
+
+
 
 
 def process(args):
