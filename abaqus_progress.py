@@ -53,6 +53,7 @@ class ProgressTracker(object):
         self.stage_started = None
         self.stage_fraction = 0.0
         self.completed = set()
+        self.stage_durations = {}
         self.last = None
 
     def _remaining(self):
@@ -81,7 +82,8 @@ class ProgressTracker(object):
             stage_elapsed_seconds=(None if self.stage_started is None
                                    else max(0.0, now - self.stage_started)),
             remaining_stages=self._remaining(),
-            note=note)
+            note=note,
+            stage_durations_seconds=dict(self.stage_durations))
         self.last = row
         return row
 
@@ -148,6 +150,7 @@ class ProgressTracker(object):
             raise ValueError("Active stage is %s, not %s" % (self.stage, stage))
         now = self.clock()
         self.stage_fraction = 1.0
+        self.stage_durations[self.stage] = max(0.0, now - self.stage_started)
         self.completed.add(self.stage_index)
         row = self._row(now, note=note)
         self.emit(self._format(row))
