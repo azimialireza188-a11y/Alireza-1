@@ -101,10 +101,24 @@ def _kinematic_norm2(q,basis):
     return float(np.sum(weights*q*q))
 
 
-def _energy_metric_vector(vector, stiffness):
-    """Return coordinates whose Euclidean norm squared equals vector' K vector."""
-    k=np.asarray(stiffness,dtype=float)
+def _energy_metric_vector(vector, stiffness, solver=None):
+    """Return coordinates whose Euclidean norm squared equals vector' K vector.
+
+    FamilyBasis already owns the validated energetic eigensystem of K0. Reuse
+    it here instead of diagonalizing the same K0 once per family per mode.
+    The dense-eigh fallback is retained only for lightweight legacy/test basis
+    objects that do not expose an EnergeticSolver.
+    """
     v=np.asarray(vector,dtype=float).reshape(-1)
+    if solver is not None and hasattr(solver,'q') and hasattr(solver,'eig'):
+        q=np.asarray(solver.q,dtype=float)
+        eig=np.asarray(solver.eig,dtype=float).reshape(-1)
+        if q.ndim!=2 or q.shape[0]!=len(v) or q.shape[1]!=len(eig):
+            raise ValueError('Cached energetic factorization does not match vector size')
+        if len(eig)==0:
+            return np.zeros(0,dtype=float)
+        return np.sqrt(eig)*(q.T@v)
+    k=np.asarray(stiffness,dtype=float)
     eig,q=np.linalg.eigh(.5*(k+k.T))
     scale=max(float(np.max(np.abs(eig))),1e-250)
     keep=eig > 1e-10*scale
@@ -145,7 +159,8 @@ def classify_mode(mode_record, harmonic_result, basis_provider, diagnostics, set
         condition.append(float(report.get('energetic_condition',1.0)))
         basis_hashes[m]=getattr(basis,'definition_hash',None)
         if float(np.linalg.norm(q)) <= 1e-14:
-            zero_metric=_energy_metric_vector(np.zeros_like(q),k)
+            zero_metric=_energy_metric_vector(
+                np.zeros_like(q),k,getattr(basis,'solver',None))
             for name in FAMILIES:
                 metric_chunks[name].append(zero_metric.copy())
             continue
@@ -166,7 +181,8 @@ def classify_mode(mode_record, harmonic_result, basis_provider, diagnostics, set
             p=parts[name]
             diag_energy[name] += .5*float(p@(k@p))
             vector_norm[name] += _kinematic_norm2(p,basis)
-            metric_chunks[name].append(_energy_metric_vector(p,k))
+            metric_chunks[name].append(
+                _energy_metric_vector(p,k,getattr(basis,'solver',None)))
         for a,b in itertools.combinations(FAMILIES,2):
             cross[a+':'+b] += float(parts[a]@(k@parts[b]))
 
