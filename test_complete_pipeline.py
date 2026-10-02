@@ -167,6 +167,8 @@ class PipelineTests(unittest.TestCase):
             summary = builder.input_summary(data)
         self.assertEqual(sorted(summary['section_segments']), ['P1', 'P2', 'P3', 'P4'])
         self.assertEqual(summary['section_segments']['P1'][0], [0., 0., 10., 0.])
+        self.assertEqual(len(summary['seams']), 4)
+        self.assertEqual(summary['seams'][0], [1., 1., 2., 0., 0., 10., 0.])
 
     def test_postprocessing_uses_this_run_and_all_modes(self):
         report = dict(odb=os.path.abspath('new run/model.odb'), reference_stress_MPa=1.0)
