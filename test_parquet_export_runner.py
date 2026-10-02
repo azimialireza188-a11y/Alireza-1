@@ -75,5 +75,42 @@ class ParquetExportRunnerTests(unittest.TestCase):
 
 
 
+    def test_external_probe_sanitizes_abaqus_python_environment(self):
+        completed=mock.Mock(returncode=0,stdout='25.0.1\n',stderr='')
+        contaminated=dict(os.environ)
+        contaminated.update({
+            'PYTHONHOME':r'C:\\SIMULIA\\Abaqus\\python',
+            'PYTHONPATH':r'C:\\SIMULIA\\Abaqus\\site-packages',
+            'PYTHONSTARTUP':'abaqus_startup.py',
+            'PYTHONNOUSERSITE':'1'})
+        with mock.patch.object(r.os,'environ',contaminated), \
+             mock.patch.object(r.subprocess,'run',return_value=completed) as run:
+            result=r._probe_external([r'C:\\Python313\\python.exe'])
+        self.assertTrue(result['ok'])
+        env=run.call_args.kwargs['env']
+        self.assertNotIn('PYTHONHOME',env)
+        self.assertNotIn('PYTHONPATH',env)
+        self.assertNotIn('PYTHONSTARTUP',env)
+        self.assertNotIn('PYTHONNOUSERSITE',env)
+
+    def test_required_failure_reports_every_runtime_attempt(self):
+        unavailable={
+            'available':False,'status':'PARQUET_RUNTIME_UNAVAILABLE',
+            'attempts':[
+                {'kind':'in_process','python':'abaqus-python',
+                 'available':False,'detail':'ModuleNotFoundError: pyarrow'},
+                {'kind':'external','command':[r'C:\\Python313\\python.exe'],
+                 'available':False,
+                 'detail':'Fatal Python error: failed to get the Python codec'}]}
+        with mock.patch.object(r,'find_runtime',return_value=unavailable):
+            with self.assertRaises(RuntimeError) as ctx:
+                r.prepare_runtime('required',r'C:\\Python313\\python.exe')
+        message=str(ctx.exception)
+        self.assertIn('C:\\Python313\\python.exe',message)
+        self.assertIn('Fatal Python error',message)
+        self.assertIn('abaqus-python',message)
+
+
+
 if __name__=='__main__':
     unittest.main()
