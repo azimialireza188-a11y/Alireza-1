@@ -339,13 +339,55 @@ def write_bundle(tables,output_root,bundle_name='modal_analysis_parquet_bundle')
     manifest_path=os.path.join(directory,'manifest.json')
     with open(manifest_path,'w',encoding='utf-8') as stream:
         json.dump(manifest,stream,indent=2,sort_keys=True)
-    zip_path=os.path.join(output_root,bundle_name+'.zip')
-    with zipfile.ZipFile(zip_path,'w',compression=zipfile.ZIP_STORED) as archive:
-        for filename in sorted(files):
-            archive.write(os.path.join(directory,filename),arcname=filename)
-        archive.write(manifest_path,arcname='manifest.json')
+    zip_path=_rebuild_bundle_zip(directory,manifest)
     return dict(directory=directory,zip_path=zip_path,manifest_path=manifest_path,
                 files=files,bytes=os.path.getsize(zip_path))
+
+
+def _bundle_zip_path(directory):
+    directory=os.path.abspath(directory)
+    return os.path.join(os.path.dirname(directory),os.path.basename(directory)+'.zip')
+
+
+def _rebuild_bundle_zip(directory,manifest):
+    zip_path=_bundle_zip_path(directory)
+    with zipfile.ZipFile(zip_path,'w',compression=zipfile.ZIP_STORED) as archive:
+        for filename in sorted((manifest.get('files') or {}).keys()):
+            path=os.path.join(directory,filename)
+            if os.path.isfile(path):
+                archive.write(path,arcname=filename)
+        manifest_path=os.path.join(directory,'manifest.json')
+        archive.write(manifest_path,arcname='manifest.json')
+    return zip_path
+
+
+def refresh_pipeline_tables(bundle_directory,report_path):
+    """Refresh only the tiny pipeline Parquet tables after export timing is final."""
+    bundle_directory=os.path.abspath(bundle_directory)
+    report_path=os.path.abspath(report_path)
+    with open(report_path,encoding='utf-8') as stream:
+        report=json.load(stream)
+    tables=pipeline_report_tables(report)
+    manifest_path=os.path.join(bundle_directory,'manifest.json')
+    if os.path.isfile(manifest_path):
+        with open(manifest_path,encoding='utf-8') as stream:
+            manifest=json.load(stream)
+    else:
+        manifest=dict(format=FORMAT_VERSION,files={})
+    files=manifest.setdefault('files',{})
+    for name,table in tables.items():
+        filename=name+'.parquet'
+        path=os.path.join(bundle_directory,filename)
+        compression=_write_parquet(table,path)
+        files[filename]=dict(
+            rows=int(table.num_rows),columns=int(table.num_columns),
+            bytes=os.path.getsize(path),sha256=_sha256(path),
+            compression=compression)
+    with open(manifest_path,'w',encoding='utf-8') as stream:
+        json.dump(manifest,stream,indent=2,sort_keys=True)
+    zip_path=_rebuild_bundle_zip(bundle_directory,manifest)
+    return dict(directory=bundle_directory,zip_path=zip_path,
+                manifest_path=manifest_path,files=files,bytes=os.path.getsize(zip_path))
 
 
 def _discover_one(directory,suffix):
