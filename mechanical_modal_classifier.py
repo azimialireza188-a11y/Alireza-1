@@ -197,8 +197,16 @@ def classify_mode(mode_record, harmonic_result, basis_provider, diagnostics, set
              _diagnostic_value(diagnostics,'longitudinal_slip_index'))
     if seam > float(cfg['seam_warning_index']):
         flags.append('HIGH_SEAM_RELATIVE_MOTION')
-    interaction=_diagnostic_value(diagnostics,'interpiece_interaction_percent')
-    if interaction > float(cfg['interpiece_warning_percent']):
+    interaction_raw=diagnostics.get('interpiece_interaction_percent',None)
+    interaction=None
+    if interaction_raw is not None:
+        try:
+            candidate=float(interaction_raw)
+            if math.isfinite(candidate):
+                interaction=candidate
+        except (TypeError,ValueError):
+            interaction=None
+    if interaction is not None and interaction > float(cfg['interpiece_warning_percent']):
         flags.append('INTERPIECE_INTERACTION_HIGH')
     max_condition=max(condition) if condition else 1.0
     if max_condition > float(cfg['basis_condition_max']):
@@ -282,7 +290,7 @@ def _gpu_module(settings):
         return None
 
 
-def classify_modes_parallel(records,settings,resource_plan):
+def classify_modes_parallel(records,settings,resource_plan,progress=None):
     records=list(records)
     layout=dict(resource_plan.get('worker_layout',{}))
     workers=max(1,int(layout.get('processes',1)))
@@ -290,11 +298,21 @@ def classify_modes_parallel(records,settings,resource_plan):
     def one(record):
         return classify_mode(record['mode_record'],record['harmonic_result'],
                              record['basis_provider'],record.get('diagnostics',{}),settings)
-    if workers == 1 or len(records) < 2:
-        rows=[one(record) for record in records]
+    total=len(records)
+    rows=[]
+    if workers == 1 or total < 2:
+        for i,record in enumerate(records,1):
+            rows.append(one(record))
+            if progress is not None:
+                progress(i,total)
     else:
-        with ThreadPoolExecutor(max_workers=min(workers,len(records))) as pool:
-            rows=list(pool.map(one,records))
+        # executor.map preserves record order; enumerate its completed iterator
+        # so one coordinator, not worker threads, emits aggregate progress.
+        with ThreadPoolExecutor(max_workers=min(workers,total)) as pool:
+            for i,row in enumerate(pool.map(one,records),1):
+                rows.append(row)
+                if progress is not None:
+                    progress(i,total)
 
     if int(resource_plan.get('gpus',0) or 0) > 0:
         xp=_gpu_module(settings)
