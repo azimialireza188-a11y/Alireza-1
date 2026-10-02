@@ -69,5 +69,37 @@ class ModalArchiveTests(unittest.TestCase):
         self.assertNotIn("variables=('S', 'E', 'SF', 'SE')", source)
 
 
+    def test_archive_mode_maps_to_canonical_section_by_piece_arclength(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=os.path.join(folder,'mapped.npz')
+            instances=[]; labels=[]; coords=[]; U=[]; UR=[]
+            label=1
+            for z in (0.,100.):
+                for x in (0.,5.,10.):
+                    instances.append('P1'); labels.append(label); coords.append((x,0.,z))
+                    U.append((x+z/100.,2*x,3*z/100.))
+                    UR.append((.01*x,.02*x,.03*x))
+                    label+=1
+            np.savez(path,metadata=np.asarray(json.dumps({'fields':['U','UR']})),
+                     modes=np.asarray([1]),eigenvalues=np.asarray([10.]),
+                     instances=np.asarray(instances),labels=np.asarray(labels),
+                     coordinates=np.asarray(coords,float),
+                     U=np.asarray([U],float),UR=np.asarray([UR],float))
+            reference=dict(
+                pieces=[dict(name='C1',original_name='P1',
+                             node_ids=[1,2,3],points=[[0.,0.],[2.5,0.],[10.,0.]])],
+                nodes=[dict(id=1,piece='C1',x=0.,y=0.),
+                       dict(id=2,piece='C1',x=2.5,y=0.),
+                       dict(id=3,piece='C1',x=10.,y=0.)])
+            with a.open_modal_archive(path) as archive:
+                mapped=a.map_mode_to_reference(archive,0,reference)
+            np.testing.assert_allclose(mapped['z'],[0.,100.])
+            self.assertEqual(mapped['U'].shape,(2,3,3))
+            np.testing.assert_allclose(mapped['U'][0,1],[2.5,5.,0.])
+            np.testing.assert_allclose(mapped['U'][1,1],[3.5,5.,3.])
+            np.testing.assert_allclose(mapped['UR'][0,1],[.025,.05,.075])
+
+
+
 if __name__ == '__main__':
     unittest.main()
