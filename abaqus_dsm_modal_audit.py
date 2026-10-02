@@ -969,21 +969,17 @@ def write_outputs(output_dir, summary):
     os.makedirs(output_dir, exist_ok=True)
     with open(os.path.join(output_dir, 'modal_audit.json'), 'w', encoding='utf-8') as stream:
         stream.write(serialized)
-    fields = ['mode', 'eigenvalue', 'stress_MPa', 'half_wavelength_mm', 'dominant_halfwaves', 'family',
-        'L_percent', 'D_percent', 'G_percent', 'percentage_kind', 'relative_residual',
-        'displacement_cross_percent', 'condition', 'cluster_id', 'mechanical_eligible',
-        'energy_status', 'energy_L_percent', 'energy_D_percent', 'energy_G_percent', 'energy_R_percent',
-        'energy_cross_terms_percent', 'spectral_fit_error', 'dominant_spectral_share', 'transverse_share',
-        'raw_vs_fitted_max_pp', 'sensitivity_range_pp', 'relative_piece_rigid_percent', 'assembly_percent', 'other_percent', 'wall_curvature_index', 'flags',
-        'eigenspace_stable_family', 'eigenspace_L_min', 'eigenspace_L_max', 'eigenspace_D_min',
-        'eigenspace_D_max', 'eigenspace_G_min', 'eigenspace_G_max']
+    fields = modal_csv_fields()
     with open(os.path.join(output_dir, 'modal_percentages.csv'), 'w', newline='', encoding='utf-8-sig') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction='ignore'); writer.writeheader()
         for row in summary['modes']:
             flat = dict(row)
             flat.update({family+'_percent': value for family, value in zip(FAMILIES, row['percentages'])})
-            flat['flags'] = ';'.join(row['flags'])
+            flat['flags'] = ';'.join(row.get('flags') or [])
             flat['sensitivity_range_pp'] = (row.get('sensitivity') or {}).get('max_range_pp')
+            for key in ('geometric_screening_percentages','cross_terms_percent','basis_hashes'):
+                if isinstance(flat.get(key),(list,tuple,dict)):
+                    flat[key]=json.dumps(flat[key],sort_keys=True)
             flat['relative_piece_rigid_percent'] = (row.get('rigid_diagnostics') or {}).get('relative_piece_rigid_percent')
             flat['assembly_percent'] = (row.get('rigid_diagnostics') or {}).get('assembly_percent')
             flat['other_percent'] = (row.get('rigid_diagnostics') or {}).get('other_percent')
@@ -992,7 +988,7 @@ def write_outputs(output_dir, summary):
                 for j, f in enumerate(FAMILIES):
                     for bound in ('min', 'max'):
                         flat['eigenspace_'+f+'_'+bound] = row['eigenspace_bounds'][bound+'_percent'][j]
-            if row['energy']:
+            if row.get('energy'):
                 flat.update({'energy_'+f+'_percent': value for f, value in row['energy']['diagonal_percent'].items()})
                 flat['energy_cross_terms_percent'] = json.dumps(row['energy']['cross_percent'], sort_keys=True)
             writer.writerow(flat)
