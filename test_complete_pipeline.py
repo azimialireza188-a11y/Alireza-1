@@ -27,6 +27,14 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(args.modal_audit)
         self.assertEqual(builder.parse_arguments(['--nodal-precision', 'single']).nodal_precision, 'single')
 
+    def test_auto_resource_cli_remains_backward_compatible(self):
+        auto = builder.parse_arguments([])
+        self.assertIsNone(auto.cpus)
+        self.assertIsNone(auto.gpus)
+        self.assertIsNone(builder.parse_arguments(['--cpus', 'auto', '--gpus', 'all']).cpus)
+        explicit = builder.parse_arguments(['--cpus', '8', '--gpus', '0'])
+        self.assertEqual((explicit.cpus, explicit.gpus), (8, 0))
+
     def test_full_run_command_accepts_longitudinal_lines_with_modal_options(self):
         args = builder.parse_arguments(['--mesh-mm', '5', '--n-modes', '250',
             '--n-vectors', '500', '--max-iterations', '1250', '--cpus', '8',
@@ -204,7 +212,7 @@ class PipelineTests(unittest.TestCase):
                             stream.write('test boundary placeholder')
                         with open(self.name+'.sta', 'w') as stream:
                             stream.write('THE ANALYSIS HAS COMPLETED SUCCESSFULLY')
-            def fake_build(inputs, cpus, buckle_output='standard', nodal_precision='full'):
+            def fake_build(inputs, cpus, gpus=0, buckle_output='standard', nodal_precision='full'):
                 self.assertEqual(builder.LONGITUDINAL_LINES, 2)
                 self.assertEqual((buckle_output, nodal_precision), ('detailed', 'full'))
                 self.assertEqual((builder.MESH_MM, builder.N_MODES, builder.N_VECTORS,
