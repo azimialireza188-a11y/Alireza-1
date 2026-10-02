@@ -67,5 +67,43 @@ class DirectShapeTests(unittest.TestCase):
         np.testing.assert_allclose(payload['sections'][payload['peak_index']], [[2, 0], [0, -1]])
 
 
+    def test_mechanical_mode_annotation_separates_family_energy_screening_and_diagnostics(self):
+        row=dict(
+            mode=111,final_family='LOCAL',family='L',
+            L_energy_percent=92.7,D_energy_percent=5.8,G_energy_percent=1.0,O_energy_percent=.5,
+            geometric_screening_family='D',
+            geometric_screening_percentages=[3.7,96.3,0.0],
+            assembly_percent=4.8,
+            seam_normal_opening_index=7.2,
+            seam_transverse_slip_index=1.1,
+            seam_longitudinal_slip_index=3.1,
+            quality_state='WARNING',
+            flags=['METRIC_SENSITIVE','HIGH_SEAM_RELATIVE_MOTION'])
+        preview=dict(peak_z_mm=1731.0)
+        note=v.mode_annotation(row,preview)
+        self.assertIn('Mode 111',note['title'])
+        self.assertIn('Mechanical LOCAL',note['title'])
+        self.assertIn('z=1731.0 mm',note['title'])
+        self.assertIn('K0 energy L/D/G/O=92.7 / 5.8 / 1.0 / 0.5 %',note['mechanical'])
+        self.assertIn('Geometric screening=D',note['screening'])
+        self.assertIn('Assembly=4.8 %',note['diagnostics'])
+        self.assertIn('seam N/T/Z=7.2 / 1.1 / 3.1',note['diagnostics'])
+        self.assertIn('METRIC_SENSITIVE',note['quality'])
+        joined='\n'.join(note.values())
+        self.assertNotIn('L/D/G/Assembly',joined)
+        self.assertNotIn('L+D+G+Assembly',joined)
+
+    def test_geometric_only_annotation_is_explicitly_screening_not_mechanical(self):
+        row=dict(mode=41,family='Assembly',percentages=[6.5,93.5,0.0],
+                 flags=['GEOMETRIC_PROXY_NOT_MECHANICAL_IDENTIFICATION'],
+                 rigid_diagnostics={'assembly_percent':31.},
+                 percentage_kind='GEOMETRIC_PROXY_DIRECT_NODAL_NORM')
+        note=v.mode_annotation(row,dict(peak_z_mm=1878.9))
+        self.assertIn('Mechanical unavailable',note['mechanical'])
+        self.assertIn('Geometric screening=Assembly',note['screening'])
+        self.assertIn('Assembly=31.0 %',note['diagnostics'])
+
+
+
 if __name__ == '__main__':
     unittest.main()
