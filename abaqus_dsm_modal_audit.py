@@ -37,7 +37,9 @@ from abaqus_modal_archive import (extract_modal_archive, open_modal_archive,
 from builtup_reference_section import build_reference_section
 from fcfsm_reference_basis import build_fcfsm_basis, get_fcfsm_basis
 from abaqus_modal_harmonics import decompose_mode
-from assembly_projector import assembly_diagnostics, seam_relative_diagnostics
+from assembly_projector import (assembly_diagnostics, seam_relative_diagnostics,
+                                assembly_diagnostics_longitudinal,
+                                seam_relative_diagnostics_longitudinal)
 from mechanical_modal_classifier import classify_modes_parallel, classify_eigenspace
 from abaqus_resource_policy import resolve_resource_plan, apply_blas_thread_env
 from abaqus_progress import ProgressTracker
@@ -532,9 +534,9 @@ def _automatic_mechanical_classification(archive_path, reference, geometric_rows
             scale=float(reference['material']['thickness_mm'])/math.sqrt(12.0)
             amplitude=np.sum(item['U']*item['U'],axis=(1,2))+scale*scale*np.sum(item['UR']*item['UR'],axis=(1,2))
             peak=int(np.argmax(amplitude))
-            section=dict(U=item['U'][peak],UR=item['UR'][peak])
-            diag=assembly_diagnostics(section,reference)
-            diag.update(seam_relative_diagnostics(section,reference))
+            whole_mode=dict(z=item['z'],U=item['U'],UR=item['UR'])
+            diag=assembly_diagnostics_longitudinal(whole_mode,reference)
+            diag.update(seam_relative_diagnostics_longitudinal(whole_mode,reference))
             # Force-resultant interaction is deliberately not fabricated from
             # kinematics. A later force-recovery implementation may populate it.
             diag['interpiece_interaction_percent']=None
@@ -665,7 +667,8 @@ def _automatic_mechanical_classification(archive_path, reference, geometric_rows
         basis_cache=basis_cache_info,
         resource_plan=resource_plan,
         progress_timing=tracker.summary(),
-        interpiece_interaction_status='UNAVAILABLE_NO_FORCE_RECOVERY')
+        interpiece_interaction_status='UNAVAILABLE_NO_FORCE_RECOVERY',
+        assembly_seam_diagnostic_scope='WHOLE_MODE_LONGITUDINAL_TRAPEZOIDAL')
     return mechanical_rows,clusters,basis_meta,resource_plan
 
 
