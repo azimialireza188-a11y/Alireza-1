@@ -287,6 +287,7 @@ def build_fcfsm_basis(reference, harmonic_n, bc='S-S'):
         reference_version=reference.get('version'),
         plate_definition=reference.get('plate_definition'),
         plate_definition_version=reference.get('plate_definition_version'),
+        corner_definition_version=reference.get('corner_definition_version'),
         plate_count=len(reference.get('plate_groups',[])),
         corner_element_count=len(reference.get('corner_elements',[])),
         cross_gap_constraints='none',
