@@ -77,5 +77,27 @@ class ReferenceSectionTests(unittest.TestCase):
 
 
 
+    def test_large_radius_ninety_degree_bend_is_corner_even_when_not_compact(self):
+        import math
+        pieces=self.square_pieces()
+        radius=40.0
+        center=(60.0,40.0)
+        arc=[(center[0]+radius*math.cos(math.radians(a)),
+              center[1]+radius*math.sin(math.radians(a)))
+             for a in (-90,-75,-60,-45,-30,-15,0)]
+        points=[(0.,0.),arc[0]]+arc[1:]+[(100.,100.)]
+        pieces['P1']=[[points[i][0],points[i][1],points[i+1][0],points[i+1][1]]
+                      for i in range(len(points)-1)]
+        ref=r.build_reference_section(pieces,3.,200000.,.3,3600.)
+        p1=ref['original_to_canonical']['P1']
+        p1_elements={e['id'] for e in ref['elements'] if e['piece']==p1}
+        corners=p1_elements.intersection(ref['corner_elements'])
+        self.assertGreaterEqual(len(corners),4)
+        wall_ids={eid for g in ref['plate_groups'] if g['piece']==p1
+                  for eid in g['element_ids']}
+        self.assertTrue(corners.isdisjoint(wall_ids))
+
+
+
 if __name__ == '__main__':
     unittest.main()
