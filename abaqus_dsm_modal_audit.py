@@ -501,19 +501,22 @@ def close_clusters(rows, tolerance):
 
 
 def _audit_progress(message):
-    print(message)
+    # Keep audit-local percentage visibly scoped; the parent pipeline publishes
+    # the true whole-run overall percentage through a structured observer.
+    print('AUDIT '+str(message).replace('overall=', 'audit_overall='))
     sys.stdout.flush()
 
 
 def _automatic_mechanical_classification(archive_path, reference, geometric_rows,
-                                         metadata, sigma, cluster_tolerance):
+                                         metadata, sigma, cluster_tolerance,
+                                         progress_callback=None):
     """Classify numeric U/UR archive after ODB extraction has finished."""
     total=len(geometric_rows)
     if total < 1:
         raise ValueError('Mechanical audit requires at least one mode')
     tracker=ProgressTracker(
         ['MAP_HARMONICS','BASIS','CLASSIFY','EIGENSPACE'],
-        [35.,20.,35.,10.],emit=_audit_progress)
+        [35.,20.,35.,10.],emit=_audit_progress,observer=progress_callback)
     mapped=[]; harmonics=[]; diagnostics_rows=[]
     tracker.start('MAP_HARMONICS')
     with open_modal_archive(archive_path) as archive:
@@ -674,7 +677,7 @@ def _automatic_mechanical_classification(archive_path, reference, geometric_rows
 
 
 
-def process(args):
+def process(args, progress_callback=None):
     # Automatic Stage-A path extracts U+UR once, then classifies the numeric
     # archive outside the ODB reader through classify_modes_parallel.
     from odbAccess import openOdb
@@ -894,7 +897,7 @@ def process(args):
         mechanical_rows,mechanical_clusters,automatic_basis_meta,automatic_resource_plan = (
             _automatic_mechanical_classification(
                 automatic_archive_path,automatic_reference,results,metadata,sigma,
-                args.cluster_tolerance))
+                args.cluster_tolerance,progress_callback=progress_callback))
         mechanical_by_mode={int(row['mode']):row for row in mechanical_rows}
         results=[merge_mechanical_row(row,mechanical_by_mode[int(row['mode'])])
                  for row in results]
