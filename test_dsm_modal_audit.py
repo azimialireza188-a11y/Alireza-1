@@ -112,5 +112,73 @@ class ModalAuditTests(unittest.TestCase):
             np.testing.assert_allclose([energy['diagonal_percent'][f] for f in 'LDG'], [3200/39, 600/39, 100/39])
 
 
+    def test_u_ur_automatically_selects_fcfsm_mechanical_path(self):
+        state=audit.mechanical_classification_state(['U','UR'])
+        self.assertTrue(state['available'])
+        self.assertEqual(state['method'],'FCFSM_K0_ENERGY')
+        self.assertEqual(state['status'],'AVAILABLE')
+
+    def test_u_only_legacy_path_is_explicitly_mechanical_unavailable(self):
+        state=audit.mechanical_classification_state(['U'])
+        self.assertFalse(state['available'])
+        self.assertEqual(state['method'],'GEOMETRIC_SCREENING_ONLY')
+        self.assertIn('MISSING_UR',state['status'])
+
+    def test_canonical_reference_hash_ignores_bolt_metadata(self):
+        section={
+            'P1': [[10.,10.,20.,10.],[20.,10.,20.,20.]],
+            'P2': [[-10.,10.,-10.,20.],[-10.,20.,-20.,20.]],
+            'P3': [[-10.,-10.,-20.,-10.],[-20.,-10.,-20.,-20.]],
+            'P4': [[10.,-10.,10.,-20.],[10.,-20.,20.,-20.]],
+        }
+        def build(bolts):
+            return {'source_inputs':{'section_segments':section,'thickness_mm':3.,
+                    'E_MPa':200000.,'nu':.3,'length_mm':3600.,
+                    'bolt_positions_mm':bolts}}
+        a=audit.canonical_reference_from_build(build([25.,225.]))
+        b=audit.canonical_reference_from_build(build([25.,125.,225.]))
+        self.assertEqual(a['definition_hash'],b['definition_hash'])
+
+    def test_mechanical_row_retains_geometric_screening_as_secondary_columns(self):
+        geometric=dict(mode=7,eigenvalue=123.,stress_MPa=123.,family='D',
+                       percentages=[10.,85.,5.],flags=['GEOMETRIC_PROXY_NOT_MECHANICAL_IDENTIFICATION'],
+                       percentage_kind='GEOMETRIC_PROXY_DIRECT_NODAL_NORM',
+                       rigid_diagnostics={'assembly_percent':4.})
+        mechanical=dict(family='LOCAL',energy_percent=[95.,3.,1.,1.],
+                        vector_percent=[90.,5.,3.,2.],flags=['METRIC_SENSITIVE'],
+                        quality_state='WARNING',mechanical_residual_percent=1.,
+                        harmonic_residual=.01,metric_sensitivity_pp=5.,
+                        assembly_percent=4.,seam_normal_opening_index=2.,
+                        seam_transverse_slip_index=1.,seam_longitudinal_slip_index=.5,
+                        interpiece_interaction_percent=0.,cross_terms_percent={},
+                        energy_closure_relative=0.,basis_condition=2.,
+                        dominant_m=7,half_wavelength_mm=514.2857,basis_hashes={7:'abc'},
+                        numeric_backend='cpu')
+        row=audit.merge_mechanical_row(geometric,mechanical)
+        self.assertEqual(row['family'],'L')
+        self.assertEqual(row['final_family'],'LOCAL')
+        self.assertEqual(row['geometric_screening_family'],'D')
+        self.assertEqual(row['geometric_screening_percentages'],[10.,85.,5.])
+        self.assertEqual(row['L_energy_percent'],95.)
+        self.assertIn('METRIC_SENSITIVE',row['flags'])
+
+    def test_modal_csv_schema_contains_all_stage_a_mechanical_fields(self):
+        fields=set(audit.modal_csv_fields())
+        required={'mode','eigenvalue','stress_MPa','dominant_m','half_wavelength_mm',
+            'L_energy_percent','D_energy_percent','G_energy_percent','O_energy_percent',
+            'L_vector_percent','D_vector_percent','G_vector_percent','O_vector_percent',
+            'assembly_percent','seam_normal_opening_index','seam_transverse_slip_index',
+            'seam_longitudinal_slip_index','interpiece_interaction_percent','final_family',
+            'quality_state','flags','harmonic_residual','mechanical_residual_percent',
+            'metric_sensitivity_pp','cluster_id','geometric_screening_family'}
+        self.assertTrue(required.issubset(fields),sorted(required-fields))
+
+    def test_process_source_extracts_u_ur_archive_before_parallel_classification(self):
+        import inspect
+        source=inspect.getsource(audit.process)
+        self.assertIn('extract_modal_archive',source)
+        self.assertIn('classify_modes_parallel',source)
+
+
 if __name__ == '__main__':
     unittest.main()
