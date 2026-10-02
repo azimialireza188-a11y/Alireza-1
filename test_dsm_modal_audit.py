@@ -1,4 +1,5 @@
 import unittest
+import inspect
 import numpy as np
 import abaqus_dsm_modal_audit as audit
 
