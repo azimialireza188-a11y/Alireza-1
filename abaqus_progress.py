@@ -55,6 +55,8 @@ class ProgressTracker(object):
         self.stage_fraction = 0.0
         self.completed = set()
         self.stage_durations = {}
+        self.stage_started_epochs = {}
+        self.stage_finished_epochs = {}
         self.last = None
 
     def _remaining(self):
@@ -119,6 +121,7 @@ class ProgressTracker(object):
         self.stage = stage
         self.stage_index = index
         self.stage_started = self.clock()
+        self.stage_started_epochs[stage] = self.stage_started
         self.stage_fraction = 0.0
         row = self._row(self.stage_started)
         return self._publish(row)
@@ -156,6 +159,7 @@ class ProgressTracker(object):
         now = self.clock()
         self.stage_fraction = 1.0
         self.stage_durations[self.stage] = max(0.0, now - self.stage_started)
+        self.stage_finished_epochs[self.stage] = now
         self.completed.add(self.stage_index)
         row = self._row(now, note=note)
         self._publish(row)
