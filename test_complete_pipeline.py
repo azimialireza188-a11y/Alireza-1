@@ -336,7 +336,7 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(os.path.join(output,'BuildOnly.inp')))
             with open(os.path.join(output,'pipeline_status.json')) as stream:
                 state=json.load(stream)
-            self.assertEqual(state['status'],'BUILT_ONLY')
+            self.assertEqual(state['status'],'BUILT')
             self.assertFalse(state['submitted'])
 
 
