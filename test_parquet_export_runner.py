@@ -59,5 +59,21 @@ class ParquetExportRunnerTests(unittest.TestCase):
             self.assertIn('--run-dir',command)
 
 
+    def test_refresh_pipeline_tables_uses_same_resolved_external_runtime(self):
+        runtime={'available':True,'kind':'external','command':['python'],'policy':'required'}
+        expected={'zip_path':'bundle.zip','bytes':789}
+        completed=mock.Mock(returncode=0,stdout=json.dumps(expected),stderr='')
+        with mock.patch.object(r.subprocess,'run',return_value=completed) as run:
+            result=r.refresh_pipeline_tables(
+                'D:/audit/modal_analysis_parquet_bundle',
+                'D:/run/pipeline_run_report.json',runtime)
+        self.assertEqual(result['bytes'],789)
+        command=run.call_args.args[0]
+        self.assertIn('--refresh-pipeline-only',command)
+        self.assertIn('--bundle-dir',command)
+        self.assertIn('--pipeline-report',command)
+
+
+
 if __name__=='__main__':
     unittest.main()
