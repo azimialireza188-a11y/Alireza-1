@@ -690,6 +690,11 @@ def process(args):
     odb = openOdb(path=odb_path, readOnly=True)
     basis_meta, stiffness, mechanical, mapped_keys = {}, None, None, None
     mode_vectors, results, clusters, previews, full_shapes = {}, [], [], [], []
+    automatic_archive_path=None
+    automatic_reference=None
+    automatic_archive_summary=None
+    automatic_resource_plan=None
+    mechanical_state_info=None
     try:
         geo = proxy_geometry(base, enhanced, odb, metadata, build)
         if args.basis:
@@ -698,6 +703,20 @@ def process(args):
         if len(frames) != len(rows):
             raise ValueError('ODB and base report mode counts differ')
         common_fields = sorted(set.intersection(*(set(f.fieldOutputs.keys()) for f in frames.values())))
+        mechanical_state_info=mechanical_classification_state(common_fields)
+        if args.basis:
+            mechanical_state_info=dict(available=True,method='EXTERNAL_MAPPED_MECHANICAL_BASIS',
+                                       status='AVAILABLE_EXPLICIT_BASIS')
+        elif mechanical_state_info['available']:
+            automatic_reference=canonical_reference_from_build(build)
+            os.makedirs(args.output_dir,exist_ok=True)
+            automatic_archive_path=os.path.join(args.output_dir,'modal_shapes_U_UR.npz')
+            automatic_archive_summary=extract_modal_archive(
+                odb,
+                dict(step=metadata['step'],source_odb_sha256=odb_hash,
+                     model_signature=signature,reference_hash=automatic_reference['definition_hash'],
+                     extraction='single_pass_global_U_UR'),
+                automatic_archive_path)
         proxy = geo['projector']
         pieces = [t['instance'] for t in geo['tracks']]
         grid = visuals.common_grid(geo['tracks'], geo['tolerance'])
@@ -853,6 +872,23 @@ def process(args):
                     row['mechanical_eligible'] = False
     finally:
         odb.close()
+
+    if automatic_archive_path is not None:
+        mechanical_rows,mechanical_clusters,automatic_basis_meta,automatic_resource_plan = (
+            _automatic_mechanical_classification(
+                automatic_archive_path,automatic_reference,results,metadata,sigma,
+                args.cluster_tolerance))
+        mechanical_by_mode={int(row['mode']):row for row in mechanical_rows}
+        results=[merge_mechanical_row(row,mechanical_by_mode[int(row['mode'])])
+                 for row in results]
+        clusters=mechanical_clusters
+        basis_meta=automatic_basis_meta
+        mechanical_state_info=dict(
+            available=True,method='FCFSM_K0_ENERGY',status='AVAILABLE',
+            reference_hash=automatic_reference['definition_hash'],
+            archive=automatic_archive_summary,
+            resource_plan=automatic_resource_plan)
+
     candidates = {f: candidate_for(f, results) for f in FAMILIES}
     comparison = read_json(args.compare) if args.compare else None
     shape_comparison = read_json(args.shape_comparison) if getattr(args, 'shape_comparison', None) else None
@@ -867,7 +903,7 @@ def process(args):
                 signature and comparison.get('model_signature') == signature and
                 comparison.get('mesh_nodes') != mesh_nodes and
                 comparison.get('basis_definition_id') == basis_meta.get('family_definition_id') and
-                comparison.get('percentage_kind') == 'MAPPED_MECHANICAL_BASIS_NORM'))
+                comparison.get('percentage_kind') == results[0].get('percentage_kind')))
         ref = dict(reference.get('families', {}).get(family, {})) or None
         if ref:
             ref['model_signature'] = reference.get('model_signature')
@@ -893,6 +929,7 @@ def process(args):
         modes_processed=len(results), mesh_nodes=mesh_nodes, sigma_ref_MPa=sigma, setup_checks_pass=setup_ok,
         percentage_kind=results[0]['percentage_kind'], basis_definition_id=basis_meta.get('family_definition_id'),
         basis_metadata=basis_meta, proxy_geometry=proxy.metadata, settings=vars(args),
+        mechanical_classification=mechanical_state_info,
         curve_reference=curve_reference,
         candidates=candidates, families=family_assessment,
         dsm_inputs_MPa={name: family_assessment[f]['accepted_stress_MPa'] for name, f in
