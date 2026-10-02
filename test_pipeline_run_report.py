@@ -31,13 +31,13 @@ class PipelineRunReportTests(unittest.TestCase):
     def test_capture_invocation_records_reproducible_normalized_command_and_context(self):
         with mock.patch.object(r,'_git_head',return_value='abc123'):
             item=r.capture_invocation(
-                r'C:\\repo\\abaqus_complete_model_m20.py',
-                ['--mesh-mm','5','--modal-audit'],cwd=r'D:\\run')
+                r'C:\repo\abaqus_complete_model_m20.py',
+                ['--mesh-mm','5','--modal-audit'],cwd=r'D:\run')
         self.assertIn('abaqus_complete_model_m20.py',item['normalized_command'])
         self.assertIn('--mesh-mm',item['normalized_command'])
         self.assertEqual(item['effective_args'],['--mesh-mm','5','--modal-audit'])
         self.assertEqual(item['git_commit'],'abc123')
-        self.assertEqual(item['launch_cwd'],r'D:\\run')
+        self.assertEqual(item['launch_cwd'],r'D:\run')
         self.assertIn('python_version',item)
 
     def test_stage_rows_include_top_level_and_nested_audit_timings(self):
