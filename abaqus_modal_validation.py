@@ -46,6 +46,42 @@ def gram_whitener(gram):
     return q/np.sqrt(eig)/scales[:, None]
 
 
+def mechanical_component_bounds(component_columns, dominance=.9):
+    """Rotation/scale-invariant L/D/G/O bounds in a common energy metric.
+
+    component_columns must already be expressed in one Euclideanized K0
+    metric (for example K0**0.5 times each component). O is the mechanical
+    residual and participates in the denominator, but can never become a
+    buckling-family label.
+    """
+    labels=('L','D','G','O')
+    arrays=[np.asarray(component_columns[name],dtype=float) for name in labels]
+    if any(a.ndim != 2 or not np.all(np.isfinite(a)) for a in arrays):
+        raise ValueError('Mechanical eigenspace components must be finite 2-D arrays')
+    dimensions={a.shape[1] for a in arrays}
+    if len(dimensions) != 1 or next(iter(dimensions),0) < 1:
+        raise ValueError('Mechanical eigenspace components require a common nonzero column dimension')
+    grams=[a.T@a for a in arrays]
+    hall=sum(grams)
+    h=.5*(hall+hall.T)
+    ev=np.linalg.eigvalsh(h)
+    if not len(ev) or ev[-1] <= 0 or ev[0] <= 1e-12*ev[-1]:
+        raise ValueError('Rank-deficient mechanical component eigenspace')
+    chol=np.linalg.cholesky(h)
+    lows=[]; highs=[]; means=[]
+    for gram in grams:
+        left=np.linalg.solve(chol,gram)
+        whitened=np.linalg.solve(chol,left.T).T
+        eig=np.clip(np.linalg.eigvalsh(.5*(whitened+whitened.T)),0.,1.)
+        lows.append(float(100*eig[0])); highs.append(float(100*eig[-1]))
+        means.append(float(100*np.mean(eig)))
+    stable=next((name for name,low in zip(labels[:3],lows[:3])
+                 if low >= 100*float(dominance)-1e-9),'Mixed')
+    return dict(min_percent=lows[:3],max_percent=highs[:3],mean_percent=means[:3],
+                O_min_percent=lows[3],O_max_percent=highs[3],O_mean_percent=means[3],
+                stable_family=stable,dimension=int(next(iter(dimensions))))
+
+
 def physics_keyword_signature(inp_path):
     """Extra check beyond geometry hashes; not a node-set equivalence proof."""
     names = {'BOUNDARY', 'MPC', 'EQUATION', 'COUPLING', 'KINEMATIC', 'DISTRIBUTING',
