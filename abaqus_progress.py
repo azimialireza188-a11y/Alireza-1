@@ -33,7 +33,7 @@ def solver_estimate_fraction(elapsed_seconds, expected_seconds=1800.0):
 
 class ProgressTracker(object):
     def __init__(self, stage_names, stage_weights=None, emit=print, clock=time.time,
-                 history_path=None, signature=None):
+                 history_path=None, signature=None, observer=None):
         self.stage_names = list(stage_names)
         if not self.stage_names or len(set(self.stage_names)) != len(self.stage_names):
             raise ValueError("stage_names must be nonempty and unique")
@@ -47,6 +47,7 @@ class ProgressTracker(object):
         self.clock = clock
         self.history_path = history_path
         self.signature = signature
+        self.observer = observer
         self.created_at = self.clock()
         self.stage = None
         self.stage_index = None
@@ -103,6 +104,12 @@ class ProgressTracker(object):
                  row["overall_percent"], _fmt_seconds(row["elapsed_seconds"]),
                  rate, eta, remaining, note))
 
+    def _publish(self, row):
+        self.emit(self._format(row))
+        if self.observer is not None:
+            self.observer(dict(row))
+        return row
+
     def start(self, stage):
         if stage not in self.stage_names:
             raise ValueError("Unknown stage: %s" % stage)
@@ -114,8 +121,7 @@ class ProgressTracker(object):
         self.stage_started = self.clock()
         self.stage_fraction = 0.0
         row = self._row(self.stage_started)
-        self.emit(self._format(row))
-        return row
+        return self._publish(row)
 
     def update(self, done=None, total=None, estimate_fraction=None, note=None):
         if self.stage is None:
