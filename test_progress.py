@@ -80,6 +80,19 @@ class ProgressTests(unittest.TestCase):
 
 
 
+    def test_tracker_records_stage_start_and_finish_epochs(self):
+        now=[100.0]
+        tracker=p.ProgressTracker(['build','solve'],[1,1],
+                                  emit=lambda unused:None,clock=lambda:now[0])
+        tracker.start('build')
+        now[0]=112.5
+        tracker.finish('build')
+        self.assertEqual(tracker.stage_started_epochs['build'],100.0)
+        self.assertEqual(tracker.stage_finished_epochs['build'],112.5)
+        self.assertAlmostEqual(tracker.stage_durations['build'],12.5)
+
+
+
     def test_observer_receives_structured_monotonic_rows_without_parsing_stdout(self):
         now=[0.0]
         observed=[]
