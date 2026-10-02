@@ -56,11 +56,11 @@ K باید سختی الاستیک مثبت‌معینِ همان درجات آ�
 
 قالب NPZ جدید `metadata.format="force_based_KJE"` از قرارداد نگاشت گره/DOF و K موجود در README_dsm_modal_audit پیروی می‌کند و به جای L/D/G صریح، آرایه‌های J و E را می‌گیرد. علاوه بر فرادادهٔ قبلی، `wall_definition`، `equilibrium_definition`، `constraint_mapping_review` و `contact_state_review` ضروری‌اند. این مسیر legacy برای NPZ خارجیِ متراکم به ۵۰۰۰ درجهٔ آزادی مقید محدود است. **Stage A خودکار جدید از این محدودیت استفاده نمی‌کند**: برای مدل چهارقطعه‌ای، canonical finite-strip reference مستقل از مش Abaqus ساخته می‌شود و برای هر harmonic، `K0/J_GD/J_D` و basisهای L/D/G به‌صورت خودکار و bolt-independent تولید و cache می‌شوند. استفاده از یک زیرماتریس دلخواه K، حذف قیود یا تفسیر انرژی خمشی به‌عنوان انرژی موضعی همچنان مجاز نیست.
 
-برای هستهٔ نیروپایه، بنچمارک مستقل با توابع اصلی و دست‌نخوردهٔ CUFSM روی ناودانی سادهٔ دوسرمفصل ساخته شده است. `benchmark_force_split_cufsm.m` فایل MAT و `verify_force_projector_benchmark.py` گزارش مقایسه را می‌سازند. نتیجهٔ ثبت‌شده: `force_projector_benchmark.json`. این آزمون صحت پیاده‌سازی جبر تفکیک را می‌سنجد؛ گواه تفکیک فیزیکی ستون چهارقطعه‌ای با پیچ و تماس نیست.
+اسکریپت legacy `verify_force_projector_benchmark.py` فقط وقتی قابل استفاده است که یک MAT مستقل و مستند از CUFSM در اختیار باشد. repository فعلی **هیچ نتیجهٔ native ثبت‌شده‌ای را به‌عنوان pass ادعا نمی‌کند**؛ نبود فایل MAT/JSON خارجی نباید با تست synthetic جایگزین یا به‌عنوان تأیید CUFSM گزارش شود.
 
 ## مرجع و محدودیت علمی
 
-* تعریف نیروپایه با تابع اصلی `SecAnal_fcFSM.m` در CUFSM نصب‌شده مقایسه شده است؛ همان تابع پشتیبانی‌نکردن از قیود کاربر را صریحاً بیان می‌کند. اعمال مستقیم آن به ستون پیچ‌دار قابل قبول نیست.
+* تعریف نیروپایهٔ Python از روی توابع اصلی CUFSM 5.70 در همین repository پیاده‌سازی شده است، اما **تأیید native MATLAB/CUFSM تا زمان اجرای benchmark خارجی زیر، pending است**. خود `SecAnal_fcFSM.m` نیز پشتیبانی‌نکردن از قیود کاربر را صریحاً بیان می‌کند؛ بنابراین اعمال مستقیم آن به ستون پیچ‌دار به‌جای reference classifier قابل قبول نیست.
 * [معرفی رسمی CUFSM و روش‌های مقید](https://www.ce.jhu.edu/cufsm/about/)
 * [مستندات تحلیل کمانش Abaqus](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEANLRefMap/simaanl-c-eigenbuckling.htm): وضعیت تماس در پایهٔ تحلیل کمانش ثابت می‌ماند.
 * mode number و eigenvalue ابتدا از description فریم استخراج می‌شوند. `frameValue` فقط وقتی به‌عنوان مقدار دقیق‌تر eigenvalue پذیرفته می‌شود که با مقدار چاپ‌شده و resolution آن سازگار باشد؛ مقدار ناسازگار رد می‌شود. دقتی بیش از شواهد ذخیره‌شدهٔ ODB ادعا نمی‌شود.
@@ -70,48 +70,54 @@ K باید سختی الاستیک مثبت‌معینِ همان درجات آ�
 
 ## بنچمارک مستقل classifier مکانیکی جدید با CUFSM/fcFSM 5.70
 
-برای Stage A جدید، قبولی تست‌های synthetic فقط صحت جبری پیاده‌سازی را نشان می‌دهد و **جای مرجع مستقل CUFSM را نمی‌گیرد**. ابزار جدید:
+برای Stage A جدید، تست‌های synthetic فقط sanity check جبری هستند و **جای اجرای واقعی CUFSM را نمی‌گیرند**. مسیر مستقل اکنون end-to-end است و از دو فایل repository استفاده می‌کند:
 
-`verify_fcfsm_classifier_benchmark.py`
+- `benchmark_fcfsm_classifier_cufsm.m`: مرجع native را مستقیماً با توابع CUFSM 5.70 تولید می‌کند؛
+- `verify_fcfsm_classifier_benchmark.py`: همان geometry/material/BC/harmonic را با implementation واقعی Stage A بازسازی و مقایسه می‌کند.
 
-دو سطح آزمون دارد:
+benchmark از یک **lipped open section پنج‌دیواره‌ای** استفاده می‌کند تا فضای Distortional تعادلی غیرصفر باشد. MATLAB با توابع واقعی `SecAnal_fcFSM`, `klocal`, `trans`, `assemble` و `elemprop`، ماتریس `K0`، basisهای L/D/G و سهم‌های یک probe مشترک را export می‌کند. Python سپس بدون فایل classifier دست‌ساز، basis را با `fcfsm_reference_basis.py` می‌سازد.
 
-1. `run_synthetic_benchmarks()` — کنترل تحلیلی خالص L/D/G روی دستگاهی که جواب دقیق آن معلوم است؛
-2. `compare_with_cufsm_reference(...)` — مقایسه با خروجی مستقل CUFSM/fcFSM از نظر **سهم خانواده** و **زاویه‌های اصلی زیرفضای خانواده**. علامت، scale و rotation داخلی basis باعث رد کاذب نمی‌شوند.
+مقایسهٔ schema v2 هم‌زمان این موارد را کنترل می‌کند:
 
-مرجع خارجی JSON باید حداقل این provenance را داشته باشد: `source.program=CUFSM`، نسخه (برای این پروژه `5.70`)، روش `fcFSM`، هندسه و ضخامت کامل benchmark، `E` و `nu`، شرط مرزی `S-S`، طول و harmonic number و برای هر یک از `L/D/G` سهم و basis. ابزار، ناسازگاری هندسه، مصالح، BC یا harmonic را **رد** می‌کند؛ آن‌ها را برای نزدیک‌تر شدن جواب silently reconcile نمی‌کند.
+- سازگاری دقیق geometry، thickness، material، `S-S`، member length و harmonic number؛
+- خطای نسبی Frobenius بین `K0_native` و `K0_Python`;
+- اختلاف سهم K0-energy برای L/D/G؛
+- principal-angle/subspace agreement برای basisهای L/D/G، مستقل از sign، scale و rotation داخلی basis.
 
-### روش تولید مرجع در MATLAB/CUFSM
+### اجرای مرجع native در MATLAB/CUFSM
 
-برای benchmark بازِ ساده و مستقل از عضو چهارقطعه‌ای پیچ‌دار، از کد واقعی repository استفاده کنید. توابع مرجع موجود در `cufsm-git-5.70/analysis/fcFSM/` هستند:
+از root repository:
 
 ```matlab
-[C_L,J_D,J_GD] = SecAnal_fcFSM(node,elem,cornerStrips);
-
-[curve,shapes,clas, ...
- curveL,shapesL,curveD,shapesD,curveG,shapesG] = ...
-    stripmain_fcFSM(prop,node,elem,lengths,springs,constraints, ...
-                    GBTcon,'S-S',m_all,neigs,ifVec,cornerStrips);
+cd('D:\CFS-Column\git_hub')
+benchmark_fcfsm_classifier_cufsm
 ```
 
-`SecAnal_fcFSM.m` تعریف‌های نیروپایه را مستقیماً می‌سازد: `C_L=null(J_GD')`، `J_D` از تعادل `Fx/Fz/T`، و در `stripmain_fcFSM.m` با K همان طول/harmonic، فضاهای D و G تشکیل می‌شوند. در پیاده‌سازی Python نیز flat plate دقیقاً از stripهای **متصل و موازی** تشکیل می‌شود؛ stripهای قوس‌های خم—including large-radius circular bends—در `cornerStrips` مرجع قرار می‌گیرند، در `K0` باقی می‌مانند ولی وارد `J_GD` نمی‌شوند. نام/version این تعریف‌ها در basis provenance ذخیره می‌شود.
+خروجی پیش‌فرض:
 
-روال benchmark پیشنهادی:
+```text
+D:\CFS-Column\git_hub\cufsm_fcfsm_reference.json
+```
 
-1. یک open section ساده با geometry/material معلوم بسازید؛
-2. فقط `S-S` و harmonic مشخص، مثلاً `m=2`، را اجرا کنید؛
-3. خروجی family basis و family result همان case را بدون تغییر در یک JSON با schema بالا export کنید؛
-4. خروجی Python Stage A را برای **همان** geometry/material/BC/harmonic export کنید؛
-5. اجرا:
+سپس در Command Prompt:
 
 ```bat
+cd /d "D:\CFS-Column\git_hub"
+
 python verify_fcfsm_classifier_benchmark.py ^
-  --reference cufsm_fcfsm_reference.json ^
-  --classifier stage_a_classifier_reference.json ^
-  --output fcfsm_classifier_comparison.json
+  --reference "cufsm_fcfsm_reference.json" ^
+  --output "fcfsm_classifier_comparison.json"
 ```
 
-پیش‌فرض مقایسه: اختلاف سهم حداکثر 1 percentage point و minimum cosine-squared زیرفضای متناظر حداقل 0.99. این حدود numerical validation هستند، نه حدود آیین‌نامه‌ای.
+در این حالت `--classifier` لازم نیست؛ ابزار Python خودش classifier-side fixture را با **کد Stage A فعلی** تولید می‌کند. گزینهٔ `--classifier` فقط برای بررسی یک fixture از پیش ساخته‌شده باقی مانده است.
 
-اگر MATLAB/CUFSM در محیط اجرا موجود نباشد، external benchmark باید با وضعیت **NOT_REQUESTED / not executed** باقی بماند. تست synthetic هرگز اجازه ندارد به‌جای آن «CUFSM benchmark passed» گزارش کند.
+پیش‌فرض acceptance عددی benchmark:
+
+- family share difference ≤ 1 percentage point؛
+- minimum cosine-squared ≥ 0.99 برای هر زیرفضای L/D/G؛
+- relative Frobenius error of K0 ≤ `1e-8`.
+
+این‌ها معیار numerical implementation validation هستند، نه حد آیین‌نامه‌ای و نه اثبات نهایی مدل چهارقطعه‌ای پیچ‌دار.
+
+تا زمانی که دو دستور بالا روی MATLAB/CUFSM واقعی اجرا نشده و `external_status = PASSED` در `fcfsm_classifier_comparison.json` ثبت نشده باشد، وضعیت external benchmark باید **NOT EXECUTED / PENDING** تلقی شود. هیچ تست synthetic یا GitHub CI اجازه ندارد جای آن را بگیرد.
 
