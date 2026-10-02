@@ -1,5 +1,6 @@
 import copy
 import unittest
+from unittest import mock
 import numpy as np
 import mechanical_modal_classifier as m
 
@@ -164,6 +165,24 @@ class MechanicalClassifierTests(unittest.TestCase):
         self.assertEqual(seen[-1],(3,3))
         self.assertEqual(sorted(done for done,total in seen),[1,2,3])
         self.assertTrue(all(total==3 for done,total in seen))
+
+
+
+    def test_classifier_reuses_basis_energetic_factorization_without_per_mode_eigh(self):
+        basis=StaticBasis()
+        # StaticBasis used by the unit tests exposes K0/C-family data but not
+        # an EnergeticSolver. A real FamilyBasis must use its cached solver
+        # eigensystem instead of diagonalizing K0 again for every family/mode.
+        import fcfsm_reference_basis as fb
+        real=fb.force_family_basis(
+            np.diag([2.,3.,4.,5.]),np.eye(4)[:,:2],np.array([[1.,0.]]))
+        h=harmonic([1.,.25,.1,.05])
+        with mock.patch.object(m.np.linalg,'eigh',
+                               side_effect=AssertionError('per-mode K0 eigh')) as eig:
+            r=m.classify_mode({'mode':1,'eigenvalue':1.},h,{1:real},
+                              diagnostics(),{})
+        self.assertIn(r['family'],('LOCAL','DISTORTIONAL','GLOBAL','MIXED','UNRESOLVED'))
+        eig.assert_not_called()
 
 
 
