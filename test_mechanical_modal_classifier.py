@@ -136,5 +136,28 @@ class MechanicalClassifierTests(unittest.TestCase):
         self.assertEqual(rows[0]['family'],'LOCAL')
 
 
+    def test_unavailable_interpiece_diagnostic_is_not_falsely_reported_as_zero(self):
+        diag=diagnostics()
+        diag.pop('interpiece_interaction_percent')
+        r=self.classify([1,0,0,0],diag=diag)
+        self.assertIsNone(r['interpiece_interaction_percent'])
+        self.assertNotIn('INTERPIECE_INTERACTION_HIGH',r['flags'])
+
+    def test_parallel_classifier_reports_aggregate_done_total_progress(self):
+        records=[]
+        for i,q in enumerate(([1,0,0,0],[0,1,0,0],[0,0,1,0]),1):
+            records.append(dict(mode_record={'mode':i,'eigenvalue':100.+i},
+                                harmonic_result=harmonic(q),basis_provider={1:StaticBasis()},
+                                diagnostics=diagnostics()))
+        seen=[]
+        m.classify_modes_parallel(
+            records,{}, {'worker_layout':{'processes':2,'blas_threads':1},'gpus':0},
+            progress=lambda done,total: seen.append((done,total)))
+        self.assertEqual(seen[-1],(3,3))
+        self.assertEqual(sorted(done for done,total in seen),[1,2,3])
+        self.assertTrue(all(total==3 for done,total in seen))
+
+
+
 if __name__=='__main__':
     unittest.main()
