@@ -263,7 +263,7 @@ def enhanced_arguments(report):
     return [os.path.splitext(report['odb'])[0]+'_modal_wavelengths_report.json']
 
 
-def run_modal_audit(run_dir):
+def run_modal_audit(run_dir, progress_callback=None):
     import importlib.util
     path = os.path.join(SCRIPT_DIR, 'abaqus_dsm_modal_audit.py')
     spec = importlib.util.spec_from_file_location('pipeline_modal_audit', path)
@@ -272,7 +272,9 @@ def run_modal_audit(run_dir):
     number = 2
     while os.path.exists(output):
         output = os.path.join(run_dir, 'modal_dsm_audit_%02d' % number); number += 1
-    summary = audit.process(audit.parse_arguments(['--run-dir', run_dir, '--output-dir', output]))
+    summary = audit.process(
+        audit.parse_arguments(['--run-dir', run_dir, '--output-dir', output]),
+        progress_callback=progress_callback)
     return dict(output_dir=output, html=os.path.join(output, 'modal_explorer.html'),
                 eigenspace_validation=os.path.join(output, 'eigenspace_validation.html'),
                 mesh_shape_archive=summary.get('mesh_shape_archive'))
@@ -323,7 +325,14 @@ def resume_postprocessing(run_dir, modal_audit=False):
         state['progress']=tracker.summary()
         if modal_audit:
             tracker.start('MODAL_AUDIT')
-            state['modal_audit'] = run_modal_audit(run_dir)
+            def audit_progress(row):
+                note='audit %s %.1f%%' % (row.get('stage'),row.get('stage_percent',0.0))
+                if row.get('done') is not None and row.get('total') is not None:
+                    note += ' %s/%s' % (row['done'],row['total'])
+                tracker.update(estimate_fraction=float(row.get('overall_percent',0.0))/100.0,
+                               note=note)
+            state['modal_audit'] = run_modal_audit(
+                run_dir,progress_callback=audit_progress)
             tracker.finish('MODAL_AUDIT')
             state['progress']=tracker.summary()
         save('COMPLETED')
@@ -1055,7 +1064,14 @@ def main(argv=None):
             if args.modal_audit:
                 tracker.start('MODAL_AUDIT')
                 progress('AUDIT: direct shapes, sensitivity and graphical explorer.')
-                state['modal_audit'] = run_modal_audit(output_dir)
+                def audit_progress(row):
+                    note='audit %s %.1f%%' % (row.get('stage'),row.get('stage_percent',0.0))
+                    if row.get('done') is not None and row.get('total') is not None:
+                        note += ' %s/%s' % (row['done'],row['total'])
+                    tracker.update(estimate_fraction=float(row.get('overall_percent',0.0))/100.0,
+                                   note=note)
+                state['modal_audit'] = run_modal_audit(
+                    output_dir,progress_callback=audit_progress)
                 tracker.finish('MODAL_AUDIT')
         else:
             progress('3/4 and 4/4 POSTPROCESS skipped by --skip-post.')
