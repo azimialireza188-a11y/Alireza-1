@@ -51,7 +51,18 @@ It contains compressed columnar files:
 - `harmonic_sections.parquet`: per-node `U + UR` coefficients for significant harmonics; default minimum share is 0.001 (0.1%) and the dominant harmonic is always retained.
 - `clusters.parquet`: repeated/near-repeated eigenspace information and bounds.
 - `provenance.parquet`: model, basis, resource and classifier provenance.
+- `pipeline_run.parquet`: normalized CMD invocation, effective arguments, git commit, host/Python context, total elapsed time and resource/settings snapshot.
+- `pipeline_stages.parquet`: exact top-level stage durations (`BUILD`, `SOLVE`, `ODB_POST`, `ENHANCED`, `MODAL_AUDIT`, `PARQUET_EXPORT`) plus nested audit timings such as `MAP_HARMONICS`, `BASIS`, `CLASSIFY` and `EIGENSPACE`.
+- `pipeline_outputs.parquet`: relative output paths, file sizes and modification times for run-size/performance review.
 - `manifest.json`: row counts, compression, file sizes and SHA-256 hashes.
+
+Normal run-directory outputs also include:
+
+- `pipeline_run_report.json`: complete run provenance, normalized reproducible command, effective settings/resource plan, total elapsed time, per-stage timings and output inventory.
+- `pipeline_stage_timings.csv`: compact timing table suitable for quick comparison across runs.
+- `pipeline_replay.cmd`: replayable normalized command preceded by the original launch working directory. CMD caret continuations/whitespace cannot be recovered after shell parsing, so this is a normalized equivalent rather than byte-for-byte typed text.
+
+The same final JSON/CSV/CMD artifacts are also copied into the upload ZIP.
 
 The Parquet bundle is an analysis sidecar; the ODB remains the authoritative Abaqus result. For later review here, upload the ZIP bundle first. Only if a question cannot be resolved from it will the full ODB or another large file be needed.
 
