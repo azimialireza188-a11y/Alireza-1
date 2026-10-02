@@ -228,9 +228,13 @@ class PipelineTests(unittest.TestCase):
             defaults = {k: getattr(builder, k) for k in
                 ('BUILTUP_DIR', 'MESH_MM', 'N_MODES', 'N_VECTORS', 'MAX_ITERATIONS',
                  'LONGITUDINAL_LINES')}
-            def fake_audit(run_dir):
+            def fake_audit(run_dir, progress_callback=None):
                 self.assertEqual(run_dir, output)
                 self.assertTrue(os.path.isfile(os.path.join(run_dir, 'enhanced_called.txt')))
+                self.assertIsNotNone(progress_callback)
+                progress_callback(dict(stage='CLASSIFY',stage_percent=50.0,
+                                       overall_percent=50.0,done=50,total=100,
+                                       note='synthetic audit midpoint'))
                 return {'status': 'audit_boundary_complete'}
             with mock.patch.dict(builder.__dict__, defaults), \
                  mock.patch.object(builder, 'SCRIPT_DIR', root), \
@@ -253,6 +257,13 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(state['settings']['longitudinal_lines'], 2)
                 self.assertEqual(state['modal_audit']['status'], 'audit_boundary_complete')
                 self.assertTrue(os.path.isfile(os.path.join(output, 'enhanced_called.txt')))
+                with open(os.path.join(output, 'pipeline.log')) as stream:
+                    progress_lines=[line for line in stream if 'PROGRESS ' in line and 'overall=' in line]
+                values=[]
+                for line in progress_lines:
+                    values.append(float(line.split('overall=')[1].split('%')[0]))
+                self.assertTrue(values)
+                self.assertTrue(all(b+1e-9>=a for a,b in zip(values,values[1:])))
                 with open(os.path.join(output, 'post_called.txt')) as stream:
                     self.assertEqual(stream.read(), os.path.join(output, 'CurrentRun.odb'))
             else:
