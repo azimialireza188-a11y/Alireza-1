@@ -13,4 +13,4 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install --upgrade pip
       - run: python -m pip install numpy scipy matplotlib
-      - run: python -m unittest test_progress.py test_resource_policy.py test_modal_archive.py test_reference_section.py test_fcfsm_reference_basis.py test_modal_harmonics.py test_assembly_projector.py test_mechanical_modal_classifier.py test_modal_validation.py test_dsm_modal_audit.py test_complete_pipeline.py -v
+      - run: python -m unittest test_progress.py test_resource_policy.py test_modal_archive.py test_reference_section.py test_fcfsm_reference_basis.py test_modal_harmonics.py test_assembly_projector.py test_mechanical_modal_classifier.py test_modal_validation.py test_dsm_modal_audit.py test_modal_visuals.py test_complete_pipeline.py -v
