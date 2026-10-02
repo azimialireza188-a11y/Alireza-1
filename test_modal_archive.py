@@ -48,6 +48,13 @@ class ModalArchiveTests(unittest.TestCase):
                 np.testing.assert_allclose(row['U'], [[1,2,3],[4,5,6]])
                 np.testing.assert_allclose(row['UR'], [[.1,.2,.3],[.4,.5,.6]])
 
+    def test_frame_value_is_used_only_when_consistent_with_description(self):
+        from types import SimpleNamespace as NS
+        good=NS(description='Mode 7: Eigen Value = 123.456',frameValue=123.456001)
+        bad=NS(description='Mode 7: Eigen Value = 123.456',frameValue=7.0)
+        self.assertAlmostEqual(a._frame_mode(good)[1],123.456001)
+        self.assertAlmostEqual(a._frame_mode(bad)[1],123.456)
+
     def test_u_only_odb_is_explicitly_unavailable_for_mechanical_classification(self):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaisesRegex(a.MechanicalClassificationUnavailable,
