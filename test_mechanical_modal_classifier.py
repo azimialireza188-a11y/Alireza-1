@@ -143,6 +143,14 @@ class MechanicalClassifierTests(unittest.TestCase):
         self.assertIsNone(r['interpiece_interaction_percent'])
         self.assertNotIn('INTERPIECE_INTERACTION_HIGH',r['flags'])
 
+    def test_zero_energy_secondary_harmonic_is_ignored_not_rejected(self):
+        h=harmonic([1,0,0,0])
+        h['components'][2]={'reference_vector':np.zeros(4)}
+        r=m.classify_mode({'mode':1,'eigenvalue':100.},h,
+                          {1:StaticBasis(),2:StaticBasis()},diagnostics(),{})
+        self.assertEqual(r['family'],'LOCAL')
+        self.assertGreater(r['L_energy_percent'],99.999)
+
     def test_parallel_classifier_reports_aggregate_done_total_progress(self):
         records=[]
         for i,q in enumerate(([1,0,0,0],[0,1,0,0],[0,0,1,0]),1):
