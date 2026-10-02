@@ -80,6 +80,33 @@ def prepare_runtime(policy='auto',preferred=None):
     return result
 
 
+def refresh_pipeline_tables(bundle_directory,report_path,runtime):
+    if not runtime or not runtime.get('available'):
+        return dict(status='PARQUET_REFRESH_UNAVAILABLE')
+    if runtime.get('kind')=='in_process':
+        result=bundle.refresh_pipeline_tables(bundle_directory,report_path)
+    else:
+        script=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'modal_analysis_parquet.py')
+        command=list(runtime['command'])+[script,
+            '--refresh-pipeline-only',
+            '--bundle-dir',os.path.abspath(bundle_directory),
+            '--pipeline-report',os.path.abspath(report_path)]
+        completed=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+                                 text=True)
+        if completed.returncode:
+            raise RuntimeError('External pipeline Parquet refresh failed: '+
+                               (completed.stderr or completed.stdout or 'unknown error').strip())
+        try:
+            result=json.loads(completed.stdout)
+        except Exception as exc:
+            raise RuntimeError('External pipeline Parquet refresh returned invalid JSON: '+
+                               completed.stdout[-2000:]) from exc
+    result=dict(result)
+    result['status']='REFRESHED'
+    return result
+
+
 def export_run(run_dir,audit_dir,runtime,output_root=None,
                harmonic_section_min_share=.001):
     if not runtime or not runtime.get('available'):
