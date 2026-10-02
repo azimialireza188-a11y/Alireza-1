@@ -30,19 +30,22 @@ CAE geometry creation and meshing, before writing the INP:
   Increasing the value retains previously selected lines.
 - `100`: all original section lines, including collinear subdivisions.
 
-`--longitudinal-line-min-spacing-mm` optionally limits how close **optional**
-lines added by values `2..99` may be along the original section path. For
-example, `--longitudinal-line-min-spacing-mm 5` prevents a newly selected
-longitudinal boundary from being placed within 5 mm of another retained
-boundary measured by section arclength. The default is `0`, which preserves the
-previous behavior exactly.
+`--longitudinal-line-min-spacing-mm` limits how close retained **nonessential**
+longitudinal lines may be along the original section path. This includes both
+new refinement lines and low-turn lines inherited from the virtual-topology
+prepass. For example, `--longitudinal-line-min-spacing-mm 5` removes/avoids
+soft boundaries that would create a strip narrower than 5 mm measured by
+section arclength. The most curvature-sensitive line is retained when soft
+lines compete inside the same spacing neighborhood. The default is `0`, which
+preserves the previous behavior exactly.
 
-Essential boundaries and bolt lines remain even if they are closer than the
-requested spacing. Mandatory internal boundaries still count towards the
-requested line budget but are never removed. The number can therefore saturate
-below the requested count when the spacing limit leaves no eligible source
-vertex. `--longitudinal-lines 100` intentionally keeps its existing meaning and
-retains every source line, bypassing the spacing filter. Value `1` is invalid.
+Hard constraints are never removed: the two section-chain ends, exact bolt-row
+partitions and genuine sharp corners (using the existing 10-degree merge
+criterion) remain even if they are closer than the requested spacing. The
+requested `--longitudinal-lines` count can therefore saturate below its budget
+when no additional eligible source vertex remains. `--longitudinal-lines 100`
+intentionally keeps its existing meaning and retains every source line,
+bypassing the spacing filter. Value `1` is invalid.
 
 The root builder includes the longitudinal-line changes from `code-change` and
 retains the root pipeline's precision, reporting and audit features. Run the
