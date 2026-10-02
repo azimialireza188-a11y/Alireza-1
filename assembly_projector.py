@@ -89,9 +89,16 @@ def assembly_diagnostics(mode,reference,metric=None):
         piece_parameters[piece]=q.tolist()
     rel=_metric_norm2(rel_u,rel_ur,weights,rotation_scale)
     within=_metric_norm2(within_u,within_ur,weights,rotation_scale)
+    total_mode=_metric_norm2(u,ur,weights,rotation_scale)
     denom=rel+within
-    ap=0. if denom<=1e-250 else 100.*rel/denom
-    wp=0. if denom<=1e-250 else 100.*within/denom
+    # A purely common rigid-body motion leaves only roundoff in rel/within.
+    # Do not normalize two machine-noise quantities into a spurious ~50/50 split.
+    negligible=max(1e-250, 1e-20*max(total_mode, 1e-250))
+    if denom <= negligible:
+        ap=0.; wp=0.
+    else:
+        ap=100.*rel/denom
+        wp=100.*within/denom
     return dict(assembly_percent=ap,within_piece_deformation_percent=wp,
                 common_rigid_parameters=common_q.tolist(),
                 piece_rigid_parameters=piece_parameters,
