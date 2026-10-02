@@ -131,5 +131,18 @@ class FcfsmBenchmarkTests(unittest.TestCase):
 
 
 
+    def test_repository_contains_native_cufsm_exporter_using_real_570_functions(self):
+        root=os.path.dirname(os.path.abspath(__file__))
+        path=os.path.join(root,'benchmark_fcfsm_classifier_cufsm.m')
+        self.assertTrue(os.path.isfile(path))
+        with open(path,encoding='utf-8') as stream:
+            source=stream.read()
+        for token in ('SecAnal_fcFSM','klocal(','trans(','assemble(','jsonencode'):
+            self.assertIn(token,source)
+        self.assertIn("cufsm-git-5.70",source)
+        self.assertIn("'schema_version',2",source.replace(' ',''))
+
+
+
 if __name__=='__main__':
     unittest.main()
