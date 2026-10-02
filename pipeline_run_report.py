@@ -211,6 +211,7 @@ def write_report(output_dir,tracker,invocation,state,started_epoch,status,
         outputs=_output_inventory(output_dir))
     json_path=os.path.join(output_dir,'pipeline_run_report.json')
     csv_path=os.path.join(output_dir,'pipeline_stage_timings.csv')
+    replay_path=os.path.join(output_dir,'pipeline_replay.cmd')
     with open(json_path,'w',encoding='utf-8') as stream:
         json.dump(report,stream,indent=2,sort_keys=True,allow_nan=False)
     fields=['scope','parent_stage','stage','status','weight_percent',
@@ -220,15 +221,24 @@ def write_report(output_dir,tracker,invocation,state,started_epoch,status,
         writer.writeheader()
         for row in stages:
             writer.writerow({key:row.get(key) for key in fields})
-    return dict(json_path=json_path,csv_path=csv_path,report=report)
+    launch=(invocation or {}).get('launch_cwd') or output_dir
+    command=(invocation or {}).get('normalized_command') or ''
+    with open(replay_path,'w',encoding='utf-8') as stream:
+        stream.write('@echo off\n')
+        stream.write('cd /d "'+str(launch).replace('"','""')+'"\n')
+        stream.write(str(command)+'\n')
+    return dict(json_path=json_path,csv_path=csv_path,
+                replay_path=replay_path,report=report)
 
 
-def append_final_report_to_zip(zip_path,json_path,csv_path):
+def append_final_report_to_zip(zip_path,json_path,csv_path,replay_path=None):
     """Replace/add final normal timing reports inside the upload ZIP."""
     zip_path=os.path.abspath(zip_path)
     temp=zip_path+'.tmp'
     replace={'pipeline_run_report.json':json_path,
              'pipeline_stage_timings.csv':csv_path}
+    if replay_path:
+        replace['pipeline_replay.cmd']=replay_path
     with zipfile.ZipFile(zip_path,'r') as source, \
          zipfile.ZipFile(temp,'w',compression=zipfile.ZIP_STORED) as target:
         for item in source.infolist():
