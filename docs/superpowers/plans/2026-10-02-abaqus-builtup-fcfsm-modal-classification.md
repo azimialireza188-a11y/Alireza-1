@@ -13,8 +13,8 @@
 ## Implementation Status — 2026-10-02
 
 - Tasks 1–10: **implemented and covered by the feature-branch regression suite**.
-- Task 11 documentation/full Python/static compatibility work: **complete**.
-- Latest code-side evidence before target-environment validation: `196 tests — OK`.
+- Task 11 documentation/full Python/static compatibility work: **complete**; whole-run progress remains monotonic through nested modal-audit progress while audit-local `done/total` remains visible.
+- Latest code-side evidence before target-environment validation: `197 tests — OK`.
 - Native CUFSM exporter: `benchmark_fcfsm_classifier_cufsm.m`; actual MATLAB/CUFSM execution remains **PENDING**.
 - Abaqus 2024 build-only integration on the target Windows host remains **PENDING**.
 - Abaqus 2024 full `--modal-audit` integration/performance evidence remains **PENDING**.
