@@ -23,6 +23,7 @@
 - Default resource behavior is aggressive: use all detected logical CPUs, request maximum supported Abaqus memory, use supported GPUs when numerically equivalent, and maintain no artificial CPU/RAM reserve.
 - Explicit positive user CPU/GPU caps remain manual overrides for backward compatibility.
 - Stage B restricted-family eigenproblems are not part of this plan.
+- Every long-running path must emit aggregate progress: current stage, overall percent, exact done/total where countable, remaining stages, elapsed time, and ETA. Solver-only heuristic percentages are labeled ESTIMATED and never reach 100% before verified completion.
 
 ## Review Focus
 
@@ -37,6 +38,8 @@
 ## File Structure
 
 **Create**
+- `abaqus_progress.py` — stage-weighted progress, exact counters, ETA/rate, solver-estimate history.
+- `test_progress.py`
 - `abaqus_resource_policy.py` — resource detection, CPU/BLAS layout, GPU capability, aggressive resource provenance.
 - `abaqus_modal_archive.py` — single-pass ODB extraction of U/UR into a compact numeric archive.
 - `builtup_reference_section.py` — canonical four-piece geometry, walls, corners, seam-pair metadata; never cross-gap ties.
@@ -66,22 +69,36 @@
 
 ---
 
-### Task 1: Aggressive Resource Policy and Abaqus Job Resources
+### Task 1: Progress Engine, Aggressive Resource Policy, and Abaqus Job Resources
 
 **Files:**
+- Create: `abaqus_progress.py`
+- Create: `test_progress.py`
 - Create: `abaqus_resource_policy.py`
 - Create: `test_resource_policy.py`
 - Modify: `abaqus_complete_model_m20.py`
 - Modify: `test_complete_pipeline.py`
 
 **Interfaces:**
+- Produces: `ProgressTracker(stage_names, stage_weights, emit=print)`
+- `ProgressTracker.start(stage)`, `update(done=None,total=None,estimate_fraction=None,note=None)`, `finish(stage)`, `summary()`
 - Produces: `detect_resources() -> dict`
 - Produces: `resolve_resource_plan(requested_cpus=None, requested_gpus=None, work_items=None) -> dict`
 - Produces: `worker_layout(logical_cpus: int, work_items: int) -> dict`
 - Produces: `gpu_array_backend() -> dict` with keys `name`, `module`, `device_count`
 - Consumed later by Tasks 2, 6, and 7.
 
-- [ ] **Step 1: Write failing resource-policy tests**
+- [ ] **Step 1: Write failing progress and resource-policy tests**
+
+Add progress tests asserting:
+- stage transitions are monotonic;
+- exact loops report `done/total`, percentage, rate and ETA;
+- remaining-stage names are reported;
+- estimated solver progress is visibly labeled `ESTIMATED`;
+- an estimated stage never reaches 100% before `finish()`;
+- concurrent worker updates are aggregated by the coordinator rather than printed per worker.
+
+
 
 Add tests asserting:
 - auto mode uses `os.cpu_count()` logical CPUs;
@@ -94,17 +111,25 @@ Add tests asserting:
 - [ ] **Step 2: Run the tests and confirm failure**
 
 Run:
-`python -m unittest test_resource_policy.py test_complete_pipeline.py -v`
+`python -m unittest test_progress.py test_resource_policy.py test_complete_pipeline.py -v`
 
 Expected: new tests fail because the module/resource semantics do not exist.
 
-- [ ] **Step 3: Implement `abaqus_resource_policy.py`**
+- [ ] **Step 3: Implement `abaqus_progress.py` and `abaqus_resource_policy.py`**
+
+The progress engine must support exact counters and clearly labeled estimates, stage-weighted overall percent, elapsed/rate/ETA calculation, remaining-stage reporting, and persistent timing history keyed by run signature when supplied.
+
+
 
 Use runtime capability detection only. `worker_layout` must choose process count and per-process BLAS thread count such that their product targets all logical CPUs. Do not reserve idle cores.
 
 GPU detection is optional/capability-driven. Never require CuPy for CPU-only systems.
 
-- [ ] **Step 4: Update the Abaqus builder resource semantics**
+- [ ] **Step 4: Update the Abaqus builder resource and progress semantics**
+
+In `abaqus_complete_model_m20.py`, wire the progress tracker through build, solver monitoring, postprocessing and modal-audit orchestration. Deterministic stages use exact counters where available; solver monitoring uses parsed trustworthy evidence first and otherwise a historical/fallback estimate that is explicitly labeled.
+
+
 
 In `abaqus_complete_model_m20.py`:
 - permit an automatic/all-core CPU setting while retaining positive integer compatibility;
@@ -115,13 +140,13 @@ In `abaqus_complete_model_m20.py`:
 - [ ] **Step 5: Run regression tests**
 
 Run:
-`python -m unittest test_resource_policy.py test_complete_pipeline.py test_longitudinal_lines.py -v`
+`python -m unittest test_progress.py test_resource_policy.py test_complete_pipeline.py test_longitudinal_lines.py -v`
 
 Expected: PASS; existing CLI forms remain accepted.
 
 - [ ] **Step 6: Commit**
 
-`git add abaqus_resource_policy.py test_resource_policy.py abaqus_complete_model_m20.py test_complete_pipeline.py && git commit -m "feat: add aggressive runtime resource policy"`
+`git add abaqus_progress.py test_progress.py abaqus_resource_policy.py test_resource_policy.py abaqus_complete_model_m20.py test_complete_pipeline.py && git commit -m "feat: add aggressive resources and runtime progress"`
 
 ---
 
