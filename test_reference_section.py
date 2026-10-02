@@ -57,5 +57,25 @@ class ReferenceSectionTests(unittest.TestCase):
         self.assertEqual(a['definition_hash'], b['definition_hash'])
 
 
+    def test_fcfsm_plate_groups_split_nonparallel_smooth_wall_segments(self):
+        pieces=self.square_pieces()
+        # Gentle, non-corner waviness: physical-wall visualization may keep this
+        # as one wall, but fcFSM SecAnal defines a plate only from parallel strips.
+        pieces['P1']=[
+            [10.,10.,20.,10.],
+            [20.,10.,30.,10.5],
+            [30.,10.5,40.,11.5],
+            [40.,11.5,50.,13.0],
+        ]
+        ref=r.build_reference_section(pieces,3.,200000.,.3,3600.)
+        p1=ref['original_to_canonical']['P1']
+        groups=[g for g in ref['plate_groups'] if g['piece']==p1]
+        self.assertEqual(len(groups),4)
+        self.assertTrue(all(len(g['element_ids'])==1 for g in groups))
+        self.assertEqual(ref['plate_definition'],
+                         'fcFSM parallel-adjacent flat strips excluding curved-corner strips')
+
+
+
 if __name__ == '__main__':
     unittest.main()
