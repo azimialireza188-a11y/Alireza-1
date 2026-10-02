@@ -43,6 +43,7 @@ import time
 from abaqus_progress import ProgressTracker, solver_estimate_fraction
 from abaqus_resource_policy import resolve_resource_plan
 import parquet_export_runner
+import pipeline_run_report
 
 # CAE noGUI executes scripts without defining __file__.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(
@@ -99,11 +100,11 @@ def parse_resource_count(value, allow_zero=False):
     return number
 
 
-def parse_arguments(argv=None):
+def effective_user_argv(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if '--' in argv:
-        argv = argv[argv.index('--')+1:]
-    elif '-cae' in argv:
+        return argv[argv.index('--')+1:]
+    if '-cae' in argv:
         # Abaqus 2024 removes the -- separator but retains its kernel options.
         filtered = []
         index = 0
@@ -116,7 +117,12 @@ def parse_arguments(argv=None):
             else:
                 filtered.append(option)
                 index += 1
-        argv = filtered
+        return filtered
+    return argv
+
+
+def parse_arguments(argv=None):
+    argv = effective_user_argv(argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--builtup-dir', default=BUILTUP_DIR, help='Source CUFSM CSV directory')
     parser.add_argument('--mesh-mm', type=float, default=MESH_MM)
@@ -998,6 +1004,12 @@ def build(inputs=None, cpus=8, gpus=0, buckle_output='standard', nodal_precision
 def main(argv=None):
     global BUILTUP_DIR, MESH_MM, N_MODES, N_VECTORS, MAX_ITERATIONS
     global LONGITUDINAL_LINES, LONGITUDINAL_LINE_MIN_SPACING_MM
+    pipeline_started_epoch=time.time()
+    launch_cwd=os.getcwd()
+    effective_cli=effective_user_argv(argv)
+    invocation=pipeline_run_report.capture_invocation(
+        os.path.join(SCRIPT_DIR,'abaqus_complete_model_m20.py'),
+        effective_cli,cwd=launch_cwd)
     args = parse_arguments(argv)
     if args.resume_post:
         return resume_postprocessing(
@@ -1054,6 +1066,11 @@ def main(argv=None):
         state['updated_at'] = datetime.datetime.now().isoformat()
         with open('pipeline_status.json', 'w') as stream:
             json.dump(state, stream, indent=2)
+        report_info=pipeline_run_report.write_report(
+            output_dir,tracker,invocation,state,pipeline_started_epoch,status)
+        state['pipeline_run_report']=dict(
+            json_path=report_info['json_path'],
+            csv_path=report_info['csv_path'])
     try:
         save_state('BUILDING')
         # Eigenvalue buckling supports solver parallelism, not element-loop parallelism.
@@ -1147,6 +1164,11 @@ def main(argv=None):
             progress('3/4 and 4/4 POSTPROCESS skipped by --skip-post.')
         state['progress'] = tracker.summary()
         save_state('COMPLETED')
+        bundle=(state.get('parquet_bundle') or {}).get('zip_path')
+        timing=state.get('pipeline_run_report') or {}
+        if bundle and os.path.isfile(bundle):
+            pipeline_run_report.append_final_report_to_zip(
+                bundle,timing.get('json_path'),timing.get('csv_path'))
         progress('COMPLETE: '+output_dir)
         return state
     except Exception as error:
