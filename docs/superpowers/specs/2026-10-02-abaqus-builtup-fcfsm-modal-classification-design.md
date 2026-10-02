@@ -442,6 +442,44 @@ The separate Step 4 imperfection and Step 5 GMNIA scripts are outside this chang
 
 The historical `--buckle-output detailed` compatibility option shall remain accepted and shall not re-enable `S/E/SF/SE` automatically.
 
+## 19.1 Aggressive resource utilization
+
+The implementation shall use an aggressive resource profile by default. The code must not reserve CPU cores or impose a fixed RAM ceiling merely for conservatism.
+
+### CPU
+
+- Detect all available logical CPUs at runtime.
+- When the user does not provide an explicit manual cap, the Abaqus solve and post-processing scheduler shall use all detected logical CPUs.
+- Independent modal/harmonic work shall be parallelized across processes or workers.
+- Dense/sparse BLAS thread counts shall be coordinated with worker count so that the aggregate runnable thread count targets the full detected CPU capacity without accidental nested oversubscription.
+- There is no artificial idle-core reserve.
+- A positive explicit user CPU value remains a manual override for backward compatibility; an automatic/all-core value becomes the recommended/default path.
+
+### Memory
+
+- Remove the fixed 24000 MB Abaqus Job memory limit.
+- In aggressive mode, request the maximum Abaqus-supported percentage of host memory (100% where accepted by Abaqus) rather than maintaining a static reserve.
+- Post-processing shall not enforce an arbitrary RAM reserve. It may use sparse storage, shared/memory-mapped read-only arrays, chunking and streaming to increase throughput and avoid duplicate allocations, but those are efficiency mechanisms rather than capacity caps.
+- If a single allocation cannot be satisfied, the code shall reduce chunk size or concurrency and continue rather than intentionally leaving a predeclared memory reserve unused.
+
+### GPU
+
+- Detect available supported GPU devices at runtime.
+- Use all supported GPUs for Abaqus or post-processing kernels only when the active backend/API can execute the operation with numerically equivalent semantics.
+- GPU use must be capability-driven, not simulated: if Abaqus 2024 or the active Python numerical stack does not support GPU acceleration for a specific operation, the code shall record that limitation and saturate CPU resources instead.
+- Optional GPU acceleration must preserve a CPU implementation and must pass numerical-equivalence checks before its results are accepted.
+
+### ODB and classification throughput
+
+- ODB extraction and mechanical classification are separated so that Abaqus ODB access does not become a multiprocessing/thread-safety bottleneck.
+- U/UR data are extracted once into a compact numeric archive, then the expensive harmonic decomposition and family projections may execute in parallel outside the ODB reader.
+- Reference bases and K0 factorizations are cached by a physical-definition hash that excludes bolt spacing/count, allowing reuse across bolt-count cases.
+- Parallel scheduling shall operate across modes/harmonics and shall not serialize independent classification work without a demonstrated thread-safety or dependency reason.
+
+### Provenance
+
+Every run records detected and used logical CPU count, process/BLAS layout, host-memory request, detected/used GPU count and backend, resource fallbacks, and wall-clock timing for ODB extraction, harmonic decomposition, basis construction/cache, classification and reporting.
+
 ## 20. Validation strategy
 
 Stage A is not considered scientifically usable until all of the following pass.
@@ -543,3 +581,4 @@ The rewrite is complete only when all of the following are true:
 13. CAE, INP and downstream GMNIA workflow compatibility are preserved.
 14. Synthetic, CUFSM/fcFSM, built-up and mesh-validation tests are present.
 15. The output plot style continues to show actual piece-wise mode shapes comparable to the supplied `mode_sections.png`, with mechanical and diagnostic annotations separated.
+16. The default resource policy aggressively uses all detected CPU capacity, requests maximum supported Abaqus memory, uses supported GPUs when numerically valid, and imposes no artificial CPU/RAM reserve.
