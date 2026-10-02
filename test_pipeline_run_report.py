@@ -71,6 +71,10 @@ class PipelineRunReportTests(unittest.TestCase):
                 started_epoch=100.0,status='POSTPROCESSING',now_epoch=142.0)
             self.assertTrue(os.path.isfile(result['json_path']))
             self.assertTrue(os.path.isfile(result['csv_path']))
+            self.assertTrue(os.path.isfile(result['replay_path']))
+            with open(result['replay_path']) as stream:
+                replay=stream.read()
+            self.assertIn('abaqus ...',replay)
             with open(result['json_path']) as stream:
                 report=json.load(stream)
             self.assertEqual(report['status'],'POSTPROCESSING')
@@ -91,11 +95,14 @@ class PipelineRunReportTests(unittest.TestCase):
             c=os.path.join(folder,'pipeline_stage_timings.csv')
             open(j,'w').write('{}')
             open(c,'w').write('stage,duration_seconds\n')
-            r.append_final_report_to_zip(zpath,j,c)
+            replay=os.path.join(folder,'pipeline_replay.cmd')
+            open(replay,'w').write('abaqus ...\n')
+            r.append_final_report_to_zip(zpath,j,c,replay)
             with zipfile.ZipFile(zpath) as zf:
                 names=set(zf.namelist())
             self.assertIn('pipeline_run_report.json',names)
             self.assertIn('pipeline_stage_timings.csv',names)
+            self.assertIn('pipeline_replay.cmd',names)
 
 
 if __name__=='__main__':
