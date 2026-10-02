@@ -29,9 +29,9 @@ class ParquetBundleTests(unittest.TestCase):
         U=np.zeros((5,3,3),float)
         UR=np.zeros_like(U)
         for i,zz in enumerate(z):
-            U[i,:,0]=np.sin(np.pi*zz/100.)*[1.,2.,.5]
-            U[i,:,2]=np.cos(np.pi*zz/100.)*[.2,.4,.1]
-            UR[i,:,1]=np.cos(np.pi*zz/100.)*[.01,.02,.005]
+            U[i,:,0]=np.sin(np.pi*zz/100.)*np.array([1.,2.,.5])
+            U[i,:,2]=np.cos(np.pi*zz/100.)*np.array([.2,.4,.1])
+            UR[i,:,1]=np.cos(np.pi*zz/100.)*np.array([.01,.02,.005])
         return dict(mode=1,eigenvalue=123.4,z=z,U=U,UR=UR)
 
     def harmonic(self):
