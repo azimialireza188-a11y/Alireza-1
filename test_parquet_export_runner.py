@@ -99,7 +99,7 @@ class ParquetExportRunnerTests(unittest.TestCase):
             'attempts':[
                 {'kind':'in_process','python':'abaqus-python',
                  'available':False,'detail':'ModuleNotFoundError: pyarrow'},
-                {'kind':'external','command':[r'C:\\Python313\\python.exe'],
+                {'kind':'external','command':['C:\\Python313\\python.exe'],
                  'available':False,
                  'detail':'Fatal Python error: failed to get the Python codec'}]}
         with mock.patch.object(r,'find_runtime',return_value=unavailable):
