@@ -83,22 +83,27 @@ class FcfsmBenchmarkTests(unittest.TestCase):
 
 
     def test_native_reference_can_generate_stage_a_fixture_from_actual_implementation(self):
-        nodes=[[0.,0.],[50.,0.],[50.,100.],[0.,100.]]
+        # Five-plate lipped open channel. n_plate > 3 guarantees a
+        # nontrivial equilibrium nullspace J_D for this benchmark.
+        nodes=[[20.,0.],[0.,0.],[0.,100.],[50.,100.],[50.,0.],[30.,0.]]
+        elements=[[1,2],[2,3],[3,4],[4,5],[5,6]]
         thickness=2.0; E=200000.; nu=.3; length=1000.; harmonic=2
         reference_model=b.reference_model_from_fixture(dict(
-            geometry=dict(name='open_channel',nodes=nodes,thickness_mm=thickness,
-                          elements=[[1,2],[2,3],[3,4]],corner_element_ids=[]),
+            geometry=dict(name='lipped_open_channel',nodes=nodes,thickness_mm=thickness,
+                          elements=elements,corner_element_ids=[]),
             material=dict(E_MPa=E,nu=nu),
             boundary_conditions=dict(longitudinal='S-S'),
             harmonic=dict(m=harmonic,length_mm=length)))
         basis=fb.build_fcfsm_basis(reference_model,harmonic)
-        probe=np.linspace(.1,1.6,4*len(nodes))
+        probe=np.linspace(.1,2.4,4*len(nodes))
+        self.assertGreater(basis.C_D.shape[1],0)
+        self.assertGreater(basis.C_G.shape[1],0)
         projected=basis.project(probe)
         native=dict(
             schema_version=2,
             source=dict(program='CUFSM',version='5.70',method='native test fixture'),
-            geometry=dict(name='open_channel',nodes=nodes,thickness_mm=thickness,
-                          elements=[[1,2],[2,3],[3,4]],corner_element_ids=[]),
+            geometry=dict(name='lipped_open_channel',nodes=nodes,thickness_mm=thickness,
+                          elements=elements,corner_element_ids=[]),
             material=dict(E_MPa=E,nu=nu),
             boundary_conditions=dict(longitudinal='S-S'),
             harmonic=dict(m=harmonic,length_mm=length),
