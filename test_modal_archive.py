@@ -16,6 +16,20 @@ def value(instance, label, data, local=None):
               precision='SINGLE_PRECISION', localCoordSystem=local)
 
 
+class NonIterableRepository(object):
+    """Minimal Abaqus-like Repository: keys/getitem/contains, but no iteration."""
+    def __init__(self, mapping):
+        self._mapping=dict(mapping)
+    def keys(self):
+        return list(self._mapping.keys())
+    def __getitem__(self,key):
+        return self._mapping[key]
+    def __contains__(self,key):
+        return key in self._mapping
+    def __iter__(self):
+        raise TypeError("'abaqus.Repository' object is not iterable")
+
+
 class ModalArchiveTests(unittest.TestCase):
     def fake_odb(self, include_ur=True, local=False):
         nodes = [NS(label=1, coordinates=(0., 0., 0.)),
@@ -32,6 +46,16 @@ class ModalArchiveTests(unittest.TestCase):
         frames.append(NS(description='Mode 1: Eigen Value = 10.0', frameValue=10., fieldOutputs=outputs))
         return NS(rootAssembly=NS(instances={'P1': inst}),
                   steps={'Buckle': NS(frames=frames)})
+
+    def test_real_abaqus_noniterable_instance_repository_is_supported(self):
+        odb=self.fake_odb()
+        odb.rootAssembly.instances=NonIterableRepository(odb.rootAssembly.instances)
+        with tempfile.TemporaryDirectory() as folder:
+            path=os.path.join(folder,'modes.npz')
+            summary=a.extract_modal_archive(odb,{'step':'Buckle'},path)
+            self.assertEqual(summary['nodes'],2)
+            with a.open_modal_archive(path) as archive:
+                self.assertEqual(archive.node_keys,[('P1',1),('P1',2)])
 
     def test_round_trip_preserves_u_ur_node_order_and_provenance(self):
         with tempfile.TemporaryDirectory() as folder:
