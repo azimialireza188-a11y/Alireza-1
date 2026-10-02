@@ -125,6 +125,37 @@ class ParquetBundleTests(unittest.TestCase):
             self.assertIn('modal_summary.parquet',names)
             self.assertIn('manifest.json',names)
 
+    def test_refresh_pipeline_tables_updates_existing_bundle_without_recomputing_modes(self):
+        report=dict(
+            format='pipeline_run_report_v1',status='COMPLETED',
+            started_at='a',updated_at='b',total_elapsed_seconds=99.,
+            invocation=dict(normalized_command='new command',effective_args=[],
+                            process_argv=[],git_commit='newsha'),
+            resource_plan={},effective_settings={},submitted=True,
+            solver_status='COMPLETED',
+            stages=[dict(scope='PIPELINE',parent_stage=None,
+                         stage='PARQUET_EXPORT',status='COMPLETED',
+                         weight_percent=4.,duration_seconds=7.5,
+                         started_at='a',finished_at='b')],
+            outputs={})
+        with tempfile.TemporaryDirectory() as folder:
+            tables=p.analysis_tables(
+                self.summary(),self.reference(),[self.mapped_mode()],[self.harmonic()],
+                harmonic_section_min_share=.001,pipeline_report=report)
+            result=p.write_bundle(tables,folder,bundle_name='demo_analysis_bundle')
+            report['total_elapsed_seconds']=101.
+            report['stages'][0]['duration_seconds']=8.25
+            report_path=os.path.join(folder,'pipeline_run_report.json')
+            with open(report_path,'w') as stream:
+                json.dump(report,stream)
+            refreshed=p.refresh_pipeline_tables(result['directory'],report_path)
+            stage=pq.read_table(os.path.join(result['directory'],'pipeline_stages.parquet')).to_pydict()
+            self.assertAlmostEqual(stage['duration_seconds'][0],8.25)
+            run=pq.read_table(os.path.join(result['directory'],'pipeline_run.parquet')).to_pydict()
+            self.assertAlmostEqual(run['total_elapsed_seconds'][0],101.)
+            with zipfile.ZipFile(refreshed['zip_path']) as zf:
+                self.assertIn('pipeline_stages.parquet',zf.namelist())
+
     def test_parquet_runtime_probe_is_explicit(self):
         probe=p.runtime_probe()
         self.assertTrue(probe['available'])
