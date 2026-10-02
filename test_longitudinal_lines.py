@@ -20,11 +20,11 @@ class LongitudinalLinesTests(unittest.TestCase):
         self.segments = [a+b for a, b in zip(self.points, self.points[1:])]
         self.legacy = {builder.xykey(self.points[0]), builder.xykey(self.points[-1])}
 
-    def select(self, count, keep=None):
+    def select(self, count, keep=None, spacing=0.0):
         self.assertTrue(hasattr(builder, 'select_longitudinal_lines'),
                         'The longitudinal geometry selector is missing')
         return builder.select_longitudinal_lines(
-            self.segments, self.legacy if keep is None else keep, count)
+            self.segments, self.legacy if keep is None else keep, count, spacing)
 
     def test_zero_preserves_the_existing_selection_exactly(self):
         self.assertEqual(self.select(0), self.legacy)
@@ -70,6 +70,51 @@ class LongitudinalLinesTests(unittest.TestCase):
         high = {builder.xykey(p) for p in points[17:-2]}
         self.assertGreater(len(selected & high), len(selected & low))
 
+    def test_optional_lines_respect_minimum_section_path_spacing(self):
+        radius = 20.0
+        points = [(radius*math.cos(i*math.pi/40.), radius*math.sin(i*math.pi/40.))
+                  for i in range(21)]
+        self.segments = [a+b for a, b in zip(points, points[1:])]
+        self.legacy = {builder.xykey(points[0]), builder.xykey(points[-1])}
+        selected = self.select(20, spacing=5.0)
+        ds = [math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:])]
+        arc = [0.0]
+        for value in ds:
+            arc.append(arc[-1]+value)
+        ids = [i for i, point in enumerate(points) if builder.xykey(point) in selected]
+        self.assertLess(len(ids)-2, 20)  # spacing saturates before the requested budget
+        self.assertGreater(len(ids), 2)
+        for a, b in zip(ids, ids[1:]):
+            self.assertGreaterEqual(arc[b]-arc[a]+1e-9, 5.0)
+
+    def test_mandatory_close_lines_are_preserved_but_do_not_allow_close_optional_lines(self):
+        radius = 20.0
+        points = [(radius*math.cos(i*math.pi/40.), radius*math.sin(i*math.pi/40.))
+                  for i in range(21)]
+        self.segments = [a+b for a, b in zip(points, points[1:])]
+        mandatory = {builder.xykey(points[0]), builder.xykey(points[-1]), builder.xykey(points[2])}
+        self.legacy = mandatory
+        selected = self.select(20, spacing=5.0)
+        self.assertTrue(mandatory <= selected)
+        ds = [math.hypot(b[0]-a[0], b[1]-a[1]) for a, b in zip(points, points[1:])]
+        arc = [0.0]
+        for value in ds:
+            arc.append(arc[-1]+value)
+        selected_ids = [i for i, point in enumerate(points) if builder.xykey(point) in selected]
+        mandatory_ids = {0, 2, len(points)-1}
+        for i in selected_ids:
+            if i in mandatory_ids:
+                continue
+            self.assertTrue(all(abs(arc[i]-arc[j])+1e-9 >= 5.0 for j in selected_ids if j != i))
+
+    def test_spacing_zero_is_exact_backward_compatibility(self):
+        for count in (2, 5, 12):
+            self.assertEqual(self.select(count), self.select(count, spacing=0.0))
+
+    def test_100_keeps_all_source_lines_even_when_spacing_is_requested(self):
+        expected = {builder.xykey(p) for p in self.points} | self.legacy
+        self.assertEqual(self.select(100, spacing=5.0), expected)
+
     def test_curve_at_either_chain_end_has_no_extra_internal_boundary(self):
         for points in (self.arc1, list(reversed(self.arc1))):
             self.segments = [a+b for a, b in zip(points, points[1:])]
@@ -80,12 +125,18 @@ class LongitudinalLinesTests(unittest.TestCase):
     def test_cli_defaults_and_valid_range(self):
         args = builder.parse_arguments([])
         self.assertEqual(getattr(args, 'longitudinal_lines', None), 0)
+        self.assertEqual(getattr(args, 'longitudinal_line_min_spacing_mm', None), 0.0)
         for count in (0, 2, 10, 99, 100):
             self.assertEqual(builder.parse_arguments(
                 ['--longitudinal-lines', str(count)]).longitudinal_lines, count)
+        self.assertEqual(builder.parse_arguments(
+            ['--longitudinal-line-min-spacing-mm', '5']).longitudinal_line_min_spacing_mm, 5.0)
         for value in ('-1', '1', '101', '2.5'):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 builder.parse_arguments(['--longitudinal-lines', value])
+        for value in ('-1', 'nan', 'inf'):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                builder.parse_arguments(['--longitudinal-line-min-spacing-mm', value])
 
 
 if __name__ == '__main__':
