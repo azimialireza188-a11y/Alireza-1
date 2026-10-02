@@ -75,7 +75,11 @@ python -m pip install pyarrow
 
 `required` قبل از build/solve وجود runtime معتبر PyArrow را بررسی می‌کند. `auto` پیش‌فرض است و در صورت نبود PyArrow فقط هشدار می‌دهد؛ `off` این خروجی را غیرفعال می‌کند. در صورت نیاز مسیر Python معمولی را می‌توان با `--parquet-python "C:\path\python.exe"` مشخص کرد. آستانهٔ ذخیرهٔ harmonicهای per-node با `--parquet-harmonic-min-share` کنترل می‌شود و پیش‌فرض `0.001` است.
 
-خروجی نهایی `modal_analysis_parquet_bundle.zip` در پوشهٔ همان modal audit قرار می‌گیرد و شامل summary مودها، harmonicها، peak-section shapeهای U/UR، ضرایب section برای harmonicهای مهم، eigenspace clusterها و provenance است. این بسته برای انتقال و تحلیل بعدی طراحی شده است و جای ODB مرجع را نمی‌گیرد.
+خروجی نهایی `modal_analysis_parquet_bundle.zip` در پوشهٔ همان modal audit قرار می‌گیرد و شامل summary مودها، harmonicها، peak-section shapeهای U/UR، ضرایب section برای harmonicهای مهم، eigenspace clusterها و provenance است. علاوه بر این سه جدول `pipeline_run.parquet`، `pipeline_stages.parquet` و `pipeline_outputs.parquet` دستور normalized اجرا، تنظیمات مؤثر، commit، resource plan، مدت هر مرحله و اندازهٔ خروجی‌ها را نگه می‌دارند.
+
+در root همان run نیز `pipeline_run_report.json`، `pipeline_stage_timings.csv` و `pipeline_replay.cmd` تولید می‌شوند. زمان‌های داخلی `MODAL_AUDIT` مانند `MAP_HARMONICS`، `BASIS`، `CLASSIFY` و `EIGENSPACE` نیز جداگانه ثبت می‌شوند. متن دقیق line-continuationهای CMD مثل `^` و فاصله‌گذاری پس از parse شدن توسط shell قابل بازیابی نیست؛ `pipeline_replay.cmd` معادل normalized و قابل‌تکرار همان invocation است.
+
+این بسته برای انتقال و تحلیل بعدی طراحی شده است و جای ODB مرجع را نمی‌گیرد.
 
 ### منابع سیستم و گزارش پیشرفت
 
