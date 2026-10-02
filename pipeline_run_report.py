@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import json
 import os
+import ntpath
 import platform
 import socket
 import subprocess
@@ -44,6 +45,13 @@ def _git_head(script_dir):
         return None
 
 
+def _absolute_path(value):
+    text=str(value)
+    if len(text)>=3 and text[1]==':' and text[2] in ('\\','/'):
+        return ntpath.normpath(text)
+    return os.path.abspath(text)
+
+
 def capture_invocation(script_path,effective_args,cwd=None):
     """Capture the reproducible command after CMD/Abaqus have tokenized it.
 
@@ -51,11 +59,11 @@ def capture_invocation(script_path,effective_args,cwd=None):
     recoverable after shell parsing, so both process argv and a normalized
     executable command are persisted.
     """
-    script_path=os.path.abspath(script_path)
+    script_path=_absolute_path(script_path)
     args=[str(x) for x in list(effective_args or [])]
-    command=['abaqus','cae','noGUI='+os.path.basename(script_path),'--']+args
+    command=['abaqus','cae','noGUI='+ntpath.basename(script_path),'--']+args
     normalized=subprocess.list2cmdline(command)
-    launch_cwd=os.path.abspath(cwd or os.getcwd())
+    launch_cwd=_absolute_path(cwd or os.getcwd())
     script_sha=None
     try:
         script_sha=_sha256(script_path)
