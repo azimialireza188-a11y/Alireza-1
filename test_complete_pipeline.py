@@ -282,6 +282,17 @@ class PipelineTests(unittest.TestCase):
                 self.assertTrue(all(b+1e-9>=a for a,b in zip(values,values[1:])))
                 with open(os.path.join(output, 'post_called.txt')) as stream:
                     self.assertEqual(stream.read(), os.path.join(output, 'CurrentRun.odb'))
+                timing_json=os.path.join(output,'pipeline_run_report.json')
+                timing_csv=os.path.join(output,'pipeline_stage_timings.csv')
+                self.assertTrue(os.path.isfile(timing_json))
+                self.assertTrue(os.path.isfile(timing_csv))
+                with open(timing_json) as stream:
+                    timing=json.load(stream)
+                self.assertEqual(timing['status'],'COMPLETED')
+                self.assertIn('--modal-audit',timing['invocation']['normalized_command'])
+                stage_names={row['stage'] for row in timing['stages']
+                             if row['scope']=='PIPELINE'}
+                self.assertTrue({'BUILD','SOLVE','ODB_POST','ENHANCED','MODAL_AUDIT'}.issubset(stage_names))
             else:
                 self.assertEqual(state['status'], 'FAILED')
                 self.assertFalse(os.path.exists(os.path.join(output, 'post_called.txt')))
@@ -367,6 +378,11 @@ class PipelineTests(unittest.TestCase):
                 state=json.load(stream)
             self.assertEqual(state['status'],'BUILT')
             self.assertFalse(state['submitted'])
+            with open(os.path.join(output,'pipeline_run_report.json')) as stream:
+                timing=json.load(stream)
+            self.assertEqual(timing['status'],'BUILT')
+            self.assertIn('--build-only',timing['invocation']['normalized_command'])
+            self.assertTrue(os.path.isfile(os.path.join(output,'pipeline_stage_timings.csv')))
 
 
 
