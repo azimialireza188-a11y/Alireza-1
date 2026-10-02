@@ -10,6 +10,17 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-02-abaqus-builtup-fcfsm-modal-classification-design.md`
 
+## Implementation Status — 2026-10-02
+
+- Tasks 1–10: **implemented and covered by the feature-branch regression suite**.
+- Task 11 documentation/full Python/static compatibility work: **complete**.
+- Latest code-side evidence before target-environment validation: `196 tests — OK`.
+- Native CUFSM exporter: `benchmark_fcfsm_classifier_cufsm.m`; actual MATLAB/CUFSM execution remains **PENDING**.
+- Abaqus 2024 build-only integration on the target Windows host remains **PENDING**.
+- Abaqus 2024 full `--modal-audit` integration/performance evidence remains **PENDING**.
+- Step 4 imperfections and Step 5 GMNIA scripts are outside this feature diff and remain unchanged.
+- Do not merge this feature branch to `main` as scientifically validated until the pending native CUFSM and Abaqus target-host checks are recorded.
+
 ## Global Constraints
 
 - Treat the full four-piece built-up section as one L/D/G system.
