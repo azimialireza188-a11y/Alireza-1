@@ -52,27 +52,27 @@ class AssemblyProjectorTests(unittest.TestCase):
     def test_within_piece_bending_is_not_redefined_as_assembly(self):
         ref=self.reference(); n=len(ref['nodes'])
         U=np.zeros((n,3)); UR=np.zeros((n,3))
-        # zero-mean non-rigid pattern in each piece
+        # Same zero-mean non-rigid rotation pattern on every piece.  A rigid
+        # piece rotation is constant UR, so this is deliberately orthogonal to
+        # the piece-rigid subspace while remaining identical across pieces.
         for piece in {x['piece'] for x in ref['nodes']}:
             ids=[i for i,node in enumerate(ref['nodes']) if node['piece']==piece]
-            values=np.linspace(-1.,1.,len(ids))
-            U[ids,0]=values*values-np.mean(values*values)
+            UR[ids,2]=[-1.,0.,1.]
         r=a.assembly_diagnostics(dict(U=U,UR=UR),ref)
-        self.assertLess(r['assembly_percent'],10.)
-        self.assertGreater(r['within_piece_deformation_percent'],90.)
+        self.assertLess(r['assembly_percent'],1e-8)
+        self.assertGreater(r['within_piece_deformation_percent'],99.999999)
 
     def test_seam_components_are_resolved_separately(self):
         ref=self.reference(); n=len(ref['nodes'])
-        for component,key in [('normal','normal_opening_index'),
-                              ('tangent','transverse_slip_index'),
-                              ('longitudinal','longitudinal_slip_index')]:
+        names={'normal':'normal','tangent':'transverse','longitudinal':'longitudinal'}
+        for component,target_name in names.items():
             U=np.zeros((n,3)); UR=np.zeros((n,3))
             a.impose_test_seam_motion(U,ref,seam_id=1,component=component,magnitude=1.)
             r=a.seam_relative_diagnostics(dict(U=U,UR=UR),ref)
-            self.assertGreater(r[key],0.)
-            others={'normal_opening_index','transverse_slip_index','longitudinal_slip_index'}-{key}
-            for other in others:
-                self.assertLess(r[other],1e-8)
+            target=next(v for v in r['values'] if v['id']==1)
+            self.assertGreater(abs(target[target_name]),0.)
+            for other in {'normal','transverse','longitudinal'}-{target_name}:
+                self.assertLess(abs(target[other]),1e-8)
 
     def test_diagnostics_are_sign_and_scale_invariant(self):
         ref=self.reference(); n=len(ref['nodes'])
