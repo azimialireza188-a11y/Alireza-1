@@ -277,5 +277,33 @@ class PipelineTests(unittest.TestCase):
             resume.assert_called_once_with('previous run', modal_audit=False)
 
 
+    def test_resume_postprocessing_uses_standard_progress_tracker(self):
+        with tempfile.TemporaryDirectory() as root:
+            odb=os.path.join(root,'Job.odb')
+            with open(odb,'w') as stream:
+                stream.write('placeholder')
+            state=dict(
+                status='SOLVED',
+                build=dict(odb=odb,reference_stress_MPa=1.0),
+                settings=dict(n_modes=2))
+            with open(os.path.join(root,'pipeline_status.json'),'w') as stream:
+                json.dump(state,stream)
+            post=types.SimpleNamespace(main=lambda argv: {'available_modes':2,'processed_modes':2})
+            enhanced=types.SimpleNamespace(main=lambda argv: {'processed_modes':2})
+            output=io.StringIO()
+            with mock.patch.object(builder,'require_completed',return_value='verified test completion'), \
+                 mock.patch.object(builder,'load_postprocessor',return_value=post), \
+                 mock.patch.object(builder,'load_enhanced_processor',return_value=enhanced), \
+                 contextlib.redirect_stdout(output):
+                result=builder.resume_postprocessing(root,modal_audit=False)
+            text=output.getvalue()
+            self.assertIn('PROGRESS',text)
+            self.assertIn('ODB_POST',text)
+            self.assertIn('ENHANCED',text)
+            self.assertEqual(result['progress']['overall_percent'],100.0)
+            self.assertEqual(result['progress']['remaining_stages'],[])
+
+
+
 if __name__ == '__main__':
     unittest.main()
