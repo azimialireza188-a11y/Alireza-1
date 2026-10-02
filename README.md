@@ -17,6 +17,7 @@ abaqus cae noGUI=abaqus_complete_model_m20.py -- ^
   --buckle-output detailed ^
   --nodal-precision full ^
   --longitudinal-lines 2 ^
+  --longitudinal-line-min-spacing-mm 5 ^
   --modal-audit
 ```
 
@@ -29,9 +30,19 @@ CAE geometry creation and meshing, before writing the INP:
   Increasing the value retains previously selected lines.
 - `100`: all original section lines, including collinear subdivisions.
 
-Essential boundaries and bolt lines remain. Mandatory internal boundaries count
-towards the requested number but are never removed. The number saturates when
-all available source lines have been retained. Value `1` is invalid.
+`--longitudinal-line-min-spacing-mm` optionally limits how close **optional**
+lines added by values `2..99` may be along the original section path. For
+example, `--longitudinal-line-min-spacing-mm 5` prevents a newly selected
+longitudinal boundary from being placed within 5 mm of another retained
+boundary measured by section arclength. The default is `0`, which preserves the
+previous behavior exactly.
+
+Essential boundaries and bolt lines remain even if they are closer than the
+requested spacing. Mandatory internal boundaries still count towards the
+requested line budget but are never removed. The number can therefore saturate
+below the requested count when the spacing limit leaves no eligible source
+vertex. `--longitudinal-lines 100` intentionally keeps its existing meaning and
+retains every source line, bypassing the spacing filter. Value `1` is invalid.
 
 The root builder includes the longitudinal-line changes from `code-change` and
 retains the root pipeline's precision, reporting and audit features. Run the

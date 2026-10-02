@@ -23,8 +23,10 @@ Buckle freezes contact at the base state; it cannot enforce new contact in
 scaled eigenmode plots. Finite-deformation contact requires nonlinear analysis.
 Use --longitudinal-lines 0 for the original simplification (default), 2..99
 for up to that many internal lines per curved region, or 100 for all source
-lines. Essential boundaries and bolt lines always remain. Lines are selected
-from the original section; no coordinates or radii are changed.
+lines. For 2..99, --longitudinal-line-min-spacing-mm can prevent optional
+added boundaries from becoming too close along the section path. Essential
+boundaries and bolt lines always remain. Lines are selected from the original
+section; no coordinates or radii are changed.
 Set --check-inputs to validate the CSV data without starting Abaqus/CAE.
 """
 import csv
@@ -53,6 +55,7 @@ N_MODES = 20          # number of requested buckling modes; e.g. 5, 10, 30 or 50
 N_VECTORS = 60       # vectors used per SUBSPACE iteration
 MAX_ITERATIONS = 300  # iteration limit for SUBSPACE, separate from mode count
 LONGITUDINAL_LINES = 0  # 0: original; 2..99: per curve; 100: all source lines
+LONGITUDINAL_LINE_MIN_SPACING_MM = 0.0  # 0: disabled; applies to optional lines for 2..99
 # Changing settings requires rebuilding the CAE/INP with this script.
 # A finer mesh increases model size; exact bolt locations may require shorter edges.
 # ====================================================================
@@ -63,6 +66,11 @@ def validate_settings():
             not isinstance(LONGITUDINAL_LINES, int) or
             LONGITUDINAL_LINES not in [0] + list(range(2, 101))):
         raise ValueError('LONGITUDINAL_LINES must be 0 or an integer from 2 to 100')
+    if (isinstance(LONGITUDINAL_LINE_MIN_SPACING_MM, bool) or
+            not isinstance(LONGITUDINAL_LINE_MIN_SPACING_MM, (int, float)) or
+            not math.isfinite(LONGITUDINAL_LINE_MIN_SPACING_MM) or
+            LONGITUDINAL_LINE_MIN_SPACING_MM < 0):
+        raise ValueError('LONGITUDINAL_LINE_MIN_SPACING_MM must be a finite nonnegative number')
     if (isinstance(MESH_MM, bool) or not isinstance(MESH_MM, (int, float)) or
             not MESH_MM > 0 or math.isinf(MESH_MM)):
         raise ValueError('MESH_MM must be a positive finite number in mm')
@@ -98,6 +106,10 @@ def parse_arguments(argv=None):
     parser.add_argument('--longitudinal-lines', type=int, default=LONGITUDINAL_LINES,
         help='0: original simplification; 2..99: internal lines per curved region; '
              '100: retain all source lines (essential and bolt lines always remain)')
+    parser.add_argument('--longitudinal-line-min-spacing-mm', type=float,
+        default=LONGITUDINAL_LINE_MIN_SPACING_MM,
+        help='Minimum section-path spacing for optional lines added by --longitudinal-lines 2..99; '
+             '0 disables the filter. Mandatory/bolt boundaries are never removed; 100 still retains all source lines.')
     parser.add_argument('--n-modes', type=int, default=N_MODES)
     parser.add_argument('--n-vectors', type=int, default=None)
     parser.add_argument('--max-iterations', type=int, default=MAX_ITERATIONS)
@@ -119,6 +131,9 @@ def parse_arguments(argv=None):
     args = parser.parse_args(argv)
     if args.longitudinal_lines not in [0] + list(range(2, 101)):
         parser.error('--longitudinal-lines must be 0 or an integer from 2 to 100')
+    if (not math.isfinite(args.longitudinal_line_min_spacing_mm) or
+            args.longitudinal_line_min_spacing_mm < 0):
+        parser.error('--longitudinal-line-min-spacing-mm must be a finite nonnegative number')
     if args.modal_audit and args.skip_post:
         parser.error('--modal-audit requires postprocessing; remove --skip-post')
     if args.resume_post and (args.build_only or args.skip_post or args.check_inputs or args.output_dir or args.output_root):
@@ -327,22 +342,59 @@ def xykey(point):
     return (round(point[0], 6), round(point[1], 6))
 
 
-def select_longitudinal_lines(segments, legacy_keep, count):
+def select_longitudinal_lines(segments, legacy_keep, count, min_spacing_mm=0.0):
     """Keep source vertices, with nested refinement weighted by turning angle.
 
     A curved region is a consecutive run of nonzero turns of the same sign;
     flats and inflections separate regions. Its end boundaries and all legacy
     boundaries are mandatory. Interior mandatory lines count towards the budget
     but are never removed, even when they already exceed it. A single sharp
-    corner remains a boundary. 100 includes collinear source subdivisions too.
+    corner remains a boundary. 100 includes every source subdivision exactly as
+    before.
+
+    For counts 2..99, min_spacing_mm applies only to OPTIONAL added boundaries.
+    Distance is measured as arclength along the original section chain, because
+    that is the actual strip width created between neighboring longitudinal
+    partitions. Mandatory/bolt boundaries are preserved even when they violate
+    the requested spacing. A positive spacing can therefore make the achieved
+    optional-line count smaller than the requested budget.
     """
     keep = set(legacy_keep)
     if count == 0:
         return keep
+    if not math.isfinite(min_spacing_mm) or min_spacing_mm < 0:
+        raise ValueError('min_spacing_mm must be finite and nonnegative')
     points = [segments[0][:2]] + [s[2:] for s in segments]
     keys = [xykey(p) for p in points]
+    # Preserve the established meaning of 100: every input section line.
     if count == 100:
         return keep | set(keys)
+
+    # Section arclength positions are used only for the optional-spacing gate.
+    arclength = [0.0]
+    for a, b in zip(points, points[1:]):
+        arclength.append(arclength[-1] + math.hypot(b[0]-a[0], b[1]-a[1]))
+
+    def chain_position(point):
+        """Map an exact/mandatory section point to its arclength when possible."""
+        px, py = point
+        best_error = float('inf')
+        best_position = None
+        for j, (a, b) in enumerate(zip(points, points[1:])):
+            vx, vy = b[0]-a[0], b[1]-a[1]
+            length2 = vx*vx + vy*vy
+            if length2 <= 0:
+                continue
+            t = ((px-a[0])*vx + (py-a[1])*vy)/length2
+            t = min(1.0, max(0.0, t))
+            qx, qy = a[0]+t*vx, a[1]+t*vy
+            error = math.hypot(px-qx, py-qy)
+            if error < best_error:
+                best_error = error
+                best_position = arclength[j] + t*math.sqrt(length2)
+        tolerance = max(1e-5, 1e-8*max(arclength[-1], 1.0))
+        return best_position if best_error <= tolerance else None
+
     keep.update((keys[0], keys[-1]))
     turns = [0.0] * len(points)
     regions = []
@@ -357,29 +409,55 @@ def select_longitudinal_lines(segments, legacy_keep, count):
                 turns[regions[-1][-1]] * turns[i] < 0):
             regions.append([])
         regions[-1].append(i)
+
+    adjusted_regions = []
     for region in regions:
+        region = list(region)
         if region[0] == 1:
             region = [0] + region
         if region[-1] == len(points)-2:
             region = region + [len(points)-1]
+        adjusted_regions.append(region)
+        keep.update((keys[region[0]], keys[region[-1]]))
+
+    spacing_positions = []
+    if min_spacing_mm > 0:
+        for point in keep:
+            position = chain_position(point)
+            if position is not None:
+                spacing_positions.append(position)
+
+    def spacing_ok(index):
+        if min_spacing_mm <= 0:
+            return True
+        position = arclength[index]
+        tolerance = 1e-9*max(arclength[-1], 1.0)
+        return all(abs(position-other) + tolerance >= min_spacing_mm
+                   for other in spacing_positions)
+
+    for region in adjusted_regions:
         first, last = region[0], region[-1]
-        keep.update((keys[first], keys[last]))
         interior = region[1:-1]
         selected = [i for i in interior if keys[i] in keep]
-        # Cumulative turning, rather than distance, concentrates lines at bends.
+        # Cumulative turning, rather than distance, keeps the existing
+        # sensitivity-focused placement. Spacing only filters candidates.
         position = {first: 0.0}
         for i in region[1:]:
             position[i] = position[i-1] + (abs(turns[i-1])+abs(turns[i]))/2.0
         candidates = [i for i in interior if keys[i] not in keep]
         while candidates and len(selected) < count:
+            eligible = [i for i in candidates if spacing_ok(i)]
+            if not eligible:
+                break
             anchors = [first, last] + selected
-            chosen = max(candidates, key=lambda i: (
+            chosen = max(eligible, key=lambda i: (
                 min(abs(position[i]-position[j]) for j in anchors), -i))
             keep.add(keys[chosen])
             selected.append(chosen)
+            if min_spacing_mm > 0:
+                spacing_positions.append(arclength[chosen])
             candidates.remove(chosen)
     return keep
-
 
 def read_geometry(folder):
     """Read original section coordinates without loading the analysis script."""
@@ -570,7 +648,8 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         part.PartitionFaceByDatumPlane(datumPlane=part.datums[plane.id], faces=face)
         keep.add(xykey((x, y)))
 
-    keep = select_longitudinal_lines(pieces[1], keep, LONGITUDINAL_LINES)
+    keep = select_longitudinal_lines(pieces[1], keep, LONGITUDINAL_LINES,
+                                     LONGITUDINAL_LINE_MIN_SPACING_MM)
     if LONGITUDINAL_LINES == 100:
         # Extrusion merges collinear sketch segments into a single face, but
         # can leave their end vertices. Restore the missing lengthwise cuts
@@ -710,7 +789,9 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         viewport.view.fitView()
     mdb.saveAs(pathName=os.path.join(os.getcwd(), MODEL_NAME+'.cae'))
     report = dict(length_mm=LENGTH_MM, target_mesh_mm=MESH_MM, modes=N_MODES,
-        longitudinal_lines=LONGITUDINAL_LINES, retained_section_lines=len(keep),
+        longitudinal_lines=LONGITUDINAL_LINES,
+        longitudinal_line_min_spacing_mm=LONGITUDINAL_LINE_MIN_SPACING_MM,
+        retained_section_lines=len(keep),
         vectors=N_VECTORS, max_iterations=MAX_ITERATIONS, cpus=cpus,
         job_name=MODEL_NAME, odb=os.path.abspath(MODEL_NAME+'.odb'),
         nodes=4*len(part.nodes), elements=4*len(part.elements), element_type='S4R',
@@ -737,12 +818,13 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
 
 def main(argv=None):
     global BUILTUP_DIR, MESH_MM, N_MODES, N_VECTORS, MAX_ITERATIONS
-    global LONGITUDINAL_LINES
+    global LONGITUDINAL_LINES, LONGITUDINAL_LINE_MIN_SPACING_MM
     args = parse_arguments(argv)
     if args.resume_post:
         return resume_postprocessing(args.resume_post, modal_audit=args.modal_audit)
     BUILTUP_DIR, MESH_MM = args.builtup_dir, args.mesh_mm
     LONGITUDINAL_LINES = args.longitudinal_lines
+    LONGITUDINAL_LINE_MIN_SPACING_MM = args.longitudinal_line_min_spacing_mm
     N_MODES, N_VECTORS, MAX_ITERATIONS = args.n_modes, args.n_vectors, args.max_iterations
     validate_settings()
     inputs = read_model_inputs(BUILTUP_DIR)
