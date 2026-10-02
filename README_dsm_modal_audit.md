@@ -40,7 +40,7 @@ abaqus python abaqus_dsm_modal_audit.py --run-dir "مسیر نتایج مرحل�
 3. میدان طولی به harmonicهای سازگار با S-S تجزیه می‌شود.
 4. برای هر harmonic، `K0/J_GD/J_D` و زیرفضاهای L/D/G برای **کل چهار قطعه با هم** ساخته می‌شوند.
 5. سهم اصلی با انرژی `K0` به‌صورت L/D/G/O محاسبه می‌شود؛ vector metric فقط cross-check است.
-6. `Assembly` و seam opening/transverse slip/longitudinal slip روی همان eigenmode اصلی و به‌صورت diagnostic مستقل گزارش می‌شوند.
+6. `Assembly` و seam opening/transverse slip/longitudinal slip روی **کل eigenmode در طول عضو** با انتگرال/وزن ذوزنقه‌ای ایستگاه‌های واقعی محاسبه و به‌صورت diagnostic مستقل گزارش می‌شوند؛ peak-displacement section فقط برای شکل و visualization است و مقدار diagnostic را تعیین نمی‌کند.
 7. مقادیر ویژهٔ نزدیک به‌صورت eigenspace بررسی می‌شوند تا چرخش دلخواه بردارهای ویژه نتیجه را عوض نکند.
 8. geometric `SectionProjector` قدیمی فقط به‌صورت `geometric_screening_family` و `geometric_screening_percentages` کنار نتیجه باقی می‌ماند.
 
