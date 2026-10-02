@@ -85,7 +85,7 @@ class ParquetExportRunnerTests(unittest.TestCase):
             'PYTHONNOUSERSITE':'1'})
         with mock.patch.object(r.os,'environ',contaminated), \
              mock.patch.object(r.subprocess,'run',return_value=completed) as run:
-            result=r._probe_external([r'C:\\Python313\\python.exe'])
+            result=r._probe_external([r'C:\Python313\python.exe'])
         self.assertTrue(result['ok'])
         env=run.call_args.kwargs['env']
         self.assertNotIn('PYTHONHOME',env)
