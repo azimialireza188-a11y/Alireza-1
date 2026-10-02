@@ -178,5 +178,17 @@ class ValidationTests(unittest.TestCase):
         np.testing.assert_allclose(v.surface_gram(ua, ub, sa, sb, za, zb), a@b.T, atol=1e-12)
 
 
+    def test_mechanical_energy_bounds_include_residual_and_are_rotation_invariant(self):
+        L=np.array([[1.,0.],[0.,1.],[0.,0.]])
+        D=np.zeros_like(L); G=np.zeros_like(L); O=np.zeros_like(L)
+        a=v.mechanical_component_bounds({'L':L,'D':D,'G':G,'O':O}, dominance=.9)
+        change=np.array([[2.,1.],[0.,3.]])
+        b=v.mechanical_component_bounds({'L':L@change,'D':D@change,'G':G@change,'O':O@change}, dominance=.9)
+        self.assertEqual(a['stable_family'],'L')
+        np.testing.assert_allclose(a['min_percent'],b['min_percent'],atol=1e-10)
+        np.testing.assert_allclose(a['max_percent'],b['max_percent'],atol=1e-10)
+        self.assertAlmostEqual(a['O_max_percent'],0.)
+
+
 if __name__ == '__main__':
     unittest.main()
