@@ -79,6 +79,14 @@ class FcFSMBasisTests(unittest.TestCase):
         self.assertTrue(np.any(np.abs(basis.K0) > 0))
         self.assertEqual(basis.J_GD.shape[1], len(ref['plate_groups']))
 
+    def test_basis_provenance_records_plate_and_corner_definition(self):
+        ref=self.reference()
+        basis=f.build_fcfsm_basis(ref,2)
+        self.assertEqual(basis.metadata['plate_definition'],ref['plate_definition'])
+        self.assertEqual(basis.metadata['plate_definition_version'],ref['plate_definition_version'])
+        self.assertEqual(basis.metadata['plate_count'],len(ref['plate_groups']))
+        self.assertEqual(basis.metadata['corner_element_count'],len(ref['corner_elements']))
+
     def test_cache_key_ignores_connection_metadata(self):
         ref = self.reference()
         a = f.basis_cache_key(ref['definition_hash'], 7, 'S-S')
