@@ -65,8 +65,9 @@ def _basis_matrix(value,name):
 
 def validate_reference_fixture(reference_json):
     reference=_load_json(reference_json)
-    if int(reference.get('schema_version',0)) != 1:
-        raise ValueError('Unsupported benchmark schema_version; expected 1')
+    schema=int(reference.get('schema_version',0))
+    if schema not in (1,2):
+        raise ValueError('Unsupported benchmark schema_version; expected 1 or 2')
     for path in _REQUIRED_REFERENCE_PATHS:
         _lookup(reference,path)
     if 'CUFSM' not in str(reference['source']['program']).upper():
@@ -114,6 +115,151 @@ def validate_reference_fixture(reference_json):
             raise ValueError('All reference family bases must use the same DOF space')
     reference['harmonic']['m']=harmonic
     return reference
+
+
+def _parallel_vectors(a,b,tol=1e-4):
+    a=np.asarray(a,dtype=float); b=np.asarray(b,dtype=float)
+    na=float(np.linalg.norm(a)); nb=float(np.linalg.norm(b))
+    if na<=0 or nb<=0:
+        return False
+    ua=a/na; ub=b/nb
+    return bool(np.max(np.abs(ua-ub))<tol or np.max(np.abs(ua+ub))<tol)
+
+
+def reference_model_from_fixture(record):
+    """Build the exact one-piece reference consumed by Stage-A basis code.
+
+    This is intentionally independent of builtup_reference_section's four-piece
+    constructor so a native CUFSM open-section benchmark can exercise the same
+    K0/J_GD/J_D implementation directly.
+    """
+    geometry=record.get('geometry') or {}
+    material=record.get('material') or {}
+    harmonic=record.get('harmonic') or {}
+    if 'elements' not in geometry:
+        raise ValueError('Benchmark fixture missing geometry.elements')
+    points=np.asarray(geometry.get('nodes'),dtype=float)
+    if points.ndim!=2 or points.shape[1]!=2 or len(points)<2 or not np.all(np.isfinite(points)):
+        raise ValueError('geometry.nodes must be a finite Nx2 array')
+    t=float(geometry.get('thickness_mm'))
+    E=float(material.get('E_MPa')); nu=float(material.get('nu'))
+    length=float(harmonic.get('length_mm'))
+    connectivity=np.asarray(geometry['elements'])
+    if connectivity.ndim!=2 or connectivity.shape[1]!=2:
+        raise ValueError('geometry.elements must be an Nx2 1-based connectivity array')
+    nodes=[dict(id=i+1,piece='C1',x=float(x),y=float(y))
+           for i,(x,y) in enumerate(points)]
+    elements=[]
+    for eid,pair in enumerate(connectivity,1):
+        try:
+            n1,n2=int(pair[0]),int(pair[1])
+        except Exception as exc:
+            raise ValueError('geometry.elements must contain integer node ids') from exc
+        if n1<1 or n2<1 or n1>len(nodes) or n2>len(nodes) or n1==n2:
+            raise ValueError('geometry.elements contains invalid node ids')
+        p1=points[n1-1]; p2=points[n2-1]
+        width=float(np.linalg.norm(p2-p1))
+        if width<=0:
+            raise ValueError('geometry.elements contains a zero-length strip')
+        elements.append(dict(id=eid,piece='C1',n1=n1,n2=n2,
+                             length_mm=width,thickness_mm=t,corner=False))
+
+    corner_ids=set(int(x) for x in geometry.get('corner_element_ids',[]))
+    if any(x<1 or x>len(elements) for x in corner_ids):
+        raise ValueError('geometry.corner_element_ids contains an invalid element id')
+    for e in elements:
+        e['corner']=e['id'] in corner_ids
+
+    # Match SecAnal_fcFSM: adjacent + parallel non-corner strips form one plate.
+    parent=list(range(len(elements)))
+    def find(i):
+        while parent[i]!=i:
+            parent[i]=parent[parent[i]]
+            i=parent[i]
+        return i
+    def union(i,j):
+        ri,rj=find(i),find(j)
+        if ri!=rj:
+            parent[rj]=ri
+    vectors=[]
+    node_sets=[]
+    for e in elements:
+        p1=points[e['n1']-1]; p2=points[e['n2']-1]
+        vectors.append(p2-p1); node_sets.append({e['n1'],e['n2']})
+    for i,a in enumerate(elements):
+        if a['id'] in corner_ids:
+            continue
+        for j in range(i+1,len(elements)):
+            b=elements[j]
+            if b['id'] in corner_ids or not (node_sets[i]&node_sets[j]):
+                continue
+            if _parallel_vectors(vectors[i],vectors[j]):
+                union(i,j)
+    groups={}
+    for i,e in enumerate(elements):
+        if e['id'] in corner_ids:
+            continue
+        groups.setdefault(find(i),[]).append(e['id'])
+    plate_groups=[dict(piece='C1',element_ids=ids)
+                  for unused,ids in sorted(groups.items(),key=lambda item:min(item[1]))]
+    if not plate_groups:
+        raise ValueError('Native benchmark has no non-corner flat plate groups')
+
+    payload=_compatibility_payload(record)
+    definition_hash=hashlib.sha256(
+        json.dumps(payload,sort_keys=True,separators=(',',':'),allow_nan=False).encode('utf-8')
+    ).hexdigest()
+    return dict(
+        version='native_cufsm_benchmark_reference_v1',
+        pieces=[dict(name='C1',original_name='C1',
+                     node_ids=[n['id'] for n in nodes],
+                     element_ids=[e['id'] for e in elements],
+                     points=points.tolist())],
+        nodes=nodes,elements=elements,plate_groups=plate_groups,
+        corner_elements=sorted(corner_ids),
+        material=dict(thickness_mm=t,E_MPa=E,nu=nu),
+        length_mm=length,definition_hash=definition_hash,
+        cross_gap_constraints=[],connection_metadata={},
+        plate_definition='fcFSM parallel-adjacent flat strips excluding curved-corner strips',
+        plate_definition_version='native_benchmark_secAnal_v1',
+        corner_definition_version='explicit_native_fixture')
+
+
+def classifier_fixture_from_cufsm_reference(reference_json):
+    """Generate the Python side directly from the implementation under test."""
+    reference=_load_json(reference_json)
+    if int(reference.get('schema_version',0))<2:
+        raise ValueError('End-to-end benchmark requires schema_version 2')
+    for key in ('probe_vector','K0'):
+        if key not in reference:
+            raise ValueError('End-to-end benchmark fixture missing '+key)
+    model=reference_model_from_fixture(reference)
+    harmonic=int(reference['harmonic']['m'])
+    basis=build_fcfsm_basis(model,harmonic,bc=reference['boundary_conditions']['longitudinal'])
+    probe=np.asarray(reference['probe_vector'],dtype=float).reshape(-1)
+    expected=4*len(model['nodes'])
+    if len(probe)!=expected or not np.all(np.isfinite(probe)):
+        raise ValueError('probe_vector must contain 4 DOFs per benchmark node')
+    projected=basis.project(probe)
+    return dict(
+        schema_version=2,
+        source=dict(program='Python Stage A',version='repository',
+                    method='FCFSM_K0_ENERGY'),
+        geometry=copy.deepcopy(reference['geometry']),
+        material=copy.deepcopy(reference['material']),
+        boundary_conditions=copy.deepcopy(reference['boundary_conditions']),
+        harmonic=copy.deepcopy(reference['harmonic']),
+        probe_vector=probe.tolist(),
+        K0=np.asarray(basis.K0,dtype=float).tolist(),
+        families={
+            'L':dict(share_percent=float(projected['energy_percent'][0]),
+                     basis=np.asarray(basis.C_L,dtype=float).tolist()),
+            'D':dict(share_percent=float(projected['energy_percent'][1]),
+                     basis=np.asarray(basis.C_D,dtype=float).tolist()),
+            'G':dict(share_percent=float(projected['energy_percent'][2]),
+                     basis=np.asarray(basis.C_G,dtype=float).tolist())},
+        residual_percent=float(projected['residual_energy_percent']),
+        basis_definition_hash=basis.definition_hash)
 
 
 def validate_classifier_fixture(classifier_json):
@@ -184,7 +330,8 @@ def principal_subspace_agreement(reference_basis,classifier_basis):
 
 def compare_with_cufsm_reference(reference_json,classifier_json,
                                  share_tolerance_pp=1.0,
-                                 minimum_cosine_squared=.99):
+                                 minimum_cosine_squared=.99,
+                                 k0_relative_tolerance=1e-8):
     reference=validate_reference_fixture(reference_json)
     classifier=validate_classifier_fixture(classifier_json)
     ref_hash=_compatibility_hash(reference)
@@ -203,6 +350,17 @@ def compare_with_cufsm_reference(reference_json,classifier_json,
         raise ValueError('minimum_cosine_squared must be in (0,1]')
     families={}
     passed=True
+    k0_error=None
+    if int(reference.get('schema_version',0))>=2:
+        if 'K0' not in reference or 'K0' not in classifier:
+            raise ValueError('schema_version 2 comparison requires K0 on both sides')
+        kr=np.asarray(reference['K0'],dtype=float)
+        kc=np.asarray(classifier['K0'],dtype=float)
+        if kr.shape!=kc.shape or kr.ndim!=2 or kr.shape[0]!=kr.shape[1]:
+            raise ValueError('Native/Python K0 dimensions differ')
+        denom=max(float(np.linalg.norm(kr)),1e-250)
+        k0_error=float(np.linalg.norm(kc-kr)/denom)
+        passed=passed and k0_error<=float(k0_relative_tolerance)
     for family in ('L','D','G'):
         ref=reference['families'][family]
         got=classifier['families'][family]
@@ -232,7 +390,9 @@ def compare_with_cufsm_reference(reference_json,classifier_json,
         boundary_conditions=reference['boundary_conditions'],
         harmonic=reference['harmonic'],
         thresholds=dict(share_tolerance_pp=float(share_tolerance_pp),
-                        minimum_cosine_squared=float(minimum_cosine_squared)),
+                        minimum_cosine_squared=float(minimum_cosine_squared),
+                        k0_relative_tolerance=float(k0_relative_tolerance)),
+        k0_relative_frobenius_error=k0_error,
         families=families,
         scope=('Independent family-share and subspace comparison. A passing '
                'synthetic test alone is not four-piece Abaqus validation.'))
@@ -279,18 +439,23 @@ def main(argv=None):
     import argparse
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--reference',help='Externally generated CUFSM/fcFSM JSON')
-    p.add_argument('--classifier',help='Stage-A classifier JSON with matching benchmark basis')
+    p.add_argument('--classifier',help='Optional prebuilt Stage-A classifier JSON; omitted => build it from the native reference with the current implementation')
     p.add_argument('--output')
     p.add_argument('--share-tolerance-pp',type=float,default=1.0)
     p.add_argument('--minimum-cosine-squared',type=float,default=.99)
+    p.add_argument('--k0-relative-tolerance',type=float,default=1e-8)
     args=p.parse_args(argv)
     result=dict(synthetic=run_synthetic_benchmarks(),external_status='NOT_REQUESTED')
-    if args.reference or args.classifier:
-        if not (args.reference and args.classifier):
-            p.error('--reference and --classifier must be supplied together')
+    if args.classifier and not args.reference:
+        p.error('--classifier requires --reference')
+    if args.reference:
+        classifier=(args.classifier if args.classifier
+                    else classifier_fixture_from_cufsm_reference(args.reference))
         result['external']=compare_with_cufsm_reference(
-            args.reference,args.classifier,args.share_tolerance_pp,args.minimum_cosine_squared)
+            args.reference,classifier,args.share_tolerance_pp,
+            args.minimum_cosine_squared,args.k0_relative_tolerance)
         result['external_status']='PASSED' if result['external']['passed'] else 'FAILED'
+        result['classifier_generated_from_reference']=bool(not args.classifier)
     if args.output:
         with open(args.output,'w') as stream:
             json.dump(result,stream,indent=2,allow_nan=False)
