@@ -1,0 +1,15 @@
+{
+  "status": "PENDING",
+  "eligible": false,
+  "model_matches": false,
+  "missing_checks": [
+    "source_derivation",
+    "published_benchmark",
+    "connection_limit",
+    "active_contact",
+    "abaqus_mesh",
+    "harmonic_convergence",
+    "eigenspace_match"
+  ],
+  "reason": "INDEPENDENT_MEASURED_PHYSICS_REPRODUCTION_REQUIRED"
+}

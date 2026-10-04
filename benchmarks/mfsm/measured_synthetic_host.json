@@ -1,0 +1,28 @@
+{
+  "kind": "SYNTHETIC_NUMERICAL_KERNEL_ONLY",
+  "scientifically_eligible": false,
+  "resources": {
+    "cpus": 9,
+    "gpus": 0,
+    "inventory": {
+      "logical_cpus": 9,
+      "physical_cores": 9,
+      "total_memory_bytes": 8589934592,
+      "available_memory_bytes": 8115113984,
+      "devices": []
+    },
+    "memory_reserve_bytes": 0,
+    "gpu_reserve_bytes": 0
+  },
+  "backend": {
+    "backend": "numpy_cpu",
+    "device": null,
+    "gpu_timings_seconds": [],
+    "reason": "NO_SUPPORTED_GPU"
+  },
+  "dofs": 300,
+  "modes": 100,
+  "basis_seconds": 0.24061585200024638,
+  "projection_seconds": 0.08438547200012181,
+  "max_closure_error": 1.4210854715202005e-15
+}

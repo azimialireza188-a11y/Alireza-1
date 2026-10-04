@@ -578,6 +578,13 @@ def process(args):
                     row['flags'].append('ADJACENT_CLUSTER_GAP_NOT_RESOLVED')
                 if label not in FAMILIES or row['family'] != label or spectrum_boundary:
                     row['mechanical_eligible'] = False
+        import mfsm_audit
+        mfsm_result = mfsm_audit.availability(getattr(args,'mfsm_pack',None))
+        if getattr(args,'mfsm_pack',None):
+            mfsm_result = mfsm_audit.evaluate(odb,frames,dict(modes=results,source_odb_sha256=odb_hash,
+                model_signature=signature),args.mfsm_pack,args.resource_policy,
+                os.path.join(args.run_dir,'.mfsm_cache'),
+                thresholds=dict(dominance=args.dominance,max_residual=args.max_residual,cluster_tolerance=args.cluster_tolerance))
     finally:
         odb.close()
     candidates = {f: candidate_for(f, results) for f in FAMILIES}
@@ -629,6 +636,7 @@ def process(args):
         sensitivity_radius_fractions=[.03, .04, .05] if physical_segments else None,
         fields_available_in_all_modes=common_fields,
         requested_fields_missing_from_some_modes=sorted(set(build.get('modal_output', {}).get('fields', []))-set(common_fields)),
+        mfsm=mfsm_result,
         limitations=['Not a classical signature curve or an automatic cFSM/GBT basis generator.',
             'Family percentages are metric/basis dependent, not portions of critical load.',
             'Without a mapped validated basis all L/D/G labels and percentages are geometric screening proxies.',
@@ -644,6 +652,7 @@ def process(args):
     except ValueError as exc:
         summary['mesh_shape_archive'] = dict(status='UNAVAILABLE_UNSUPPORTED_TOPOLOGY', reason=str(exc))
     write_outputs(args.output_dir, summary)
+    mfsm_audit.write_report(args.output_dir, mfsm_result)
     validation.write_cluster_report(args.output_dir, summary)
     visuals.write_visuals(args.output_dir, summary, previews,
         dict(xy=geo['xy'].tolist(), edges=geo['edges'], pieces=pieces), spectra)
@@ -747,6 +756,10 @@ def parse_arguments(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--run-dir', required=True)
     p.add_argument('--output-dir')
+    p.add_argument('--classifier', choices=('auto','screening','external','mfsm'), default='auto')
+    p.add_argument('--mfsm-pack', help='Documented system/strain/search operator NPZ; physical validation required')
+    p.add_argument('--cpus', default='auto')
+    p.add_argument('--gpus', default='auto')
     p.add_argument('--basis', help='Mapped cFSM/GBT/mechanical basis NPZ; optionally contains compatible elastic K')
     p.add_argument('--compare', help='modal_audit.json from a different mesh of the same physical model')
     p.add_argument('--shape-comparison', help='mesh_comparison.json with quantitative matched eigenspaces of both ODBs')
@@ -764,6 +777,19 @@ def parse_arguments(argv=None):
     p.add_argument('--max-other-percent', type=float, default=25.,
                    help='Above this transverse-extension self-norm share, do not force the mode into DSM L/D/G')
     args = p.parse_args(argv)
+    import runtime_resources as resources
+    try:
+        args.resource_policy = resources.resolve_policy(resources.detect_resources(),args.cpus,args.gpus).provenance()
+    except (ValueError,OSError) as exc:
+        p.error(str(exc))
+    if args.classifier == 'mfsm' and not args.mfsm_pack:
+        p.error('--classifier mfsm requires --mfsm-pack')
+    if args.classifier == 'external' and not args.basis:
+        p.error('--classifier external requires --basis')
+    if args.mfsm_pack and args.basis:
+        p.error('Use either --mfsm-pack or --basis')
+    if args.classifier == 'screening' and (args.mfsm_pack or args.basis):
+        p.error('Screening cannot use a mechanical pack')
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
     if args.curve_reference:
         args.curve_reference = os.path.abspath(os.path.expanduser(args.curve_reference))

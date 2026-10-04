@@ -204,7 +204,7 @@ class PipelineTests(unittest.TestCase):
                             stream.write('test boundary placeholder')
                         with open(self.name+'.sta', 'w') as stream:
                             stream.write('THE ANALYSIS HAS COMPLETED SUCCESSFULLY')
-            def fake_build(inputs, cpus, buckle_output='standard', nodal_precision='full'):
+            def fake_build(inputs, cpus, buckle_output='standard', nodal_precision='full', resource_policy=None):
                 self.assertEqual(builder.LONGITUDINAL_LINES, 2)
                 self.assertEqual((buckle_output, nodal_precision), ('detailed', 'full'))
                 self.assertEqual((builder.MESH_MM, builder.N_MODES, builder.N_VECTORS,
@@ -218,7 +218,7 @@ class PipelineTests(unittest.TestCase):
             defaults = {k: getattr(builder, k) for k in
                 ('BUILTUP_DIR', 'MESH_MM', 'N_MODES', 'N_VECTORS', 'MAX_ITERATIONS',
                  'LONGITUDINAL_LINES')}
-            def fake_audit(run_dir):
+            def fake_audit(run_dir, options=None):
                 self.assertEqual(run_dir, output)
                 self.assertTrue(os.path.isfile(os.path.join(run_dir, 'enhanced_called.txt')))
                 return {'status': 'audit_boundary_complete'}
@@ -269,3 +269,11 @@ class PipelineTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class MFSMPipelineOptionsTests(unittest.TestCase):
+    def test_pack_enables_audit_and_options_survive_resume(self):
+        import abaqus_complete_model_m20 as builder
+        args=builder.parse_arguments(['--check-inputs','--mfsm-pack','fixture.npz','--modal-classifier','mfsm','--cpus','2','--gpus','0'])
+        self.assertTrue(args.modal_audit)
+        self.assertEqual(args.modal_classifier,'mfsm')
+        self.assertTrue(args.mfsm_pack.endswith('fixture.npz'))

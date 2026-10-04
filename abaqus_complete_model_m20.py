@@ -113,7 +113,8 @@ def parse_arguments(argv=None):
     parser.add_argument('--n-modes', type=int, default=N_MODES)
     parser.add_argument('--n-vectors', type=int, default=None)
     parser.add_argument('--max-iterations', type=int, default=MAX_ITERATIONS)
-    parser.add_argument('--cpus', type=int, default=8)
+    parser.add_argument('--cpus', default='auto', help='auto: all visible logical CPUs; or positive integer')
+    parser.add_argument('--gpus', default='auto', help='auto: all compatible visible GPUs; 0 disables; or device count')
     parser.add_argument('--buckle-output', choices=('standard', 'detailed'), default='standard',
                         help='Legacy compatibility option. Automatic buckling now always stores classification-only nodal mode shapes; detailed no longer adds S/E/SF/SE.')
     parser.add_argument('--nodal-precision', choices=('full', 'single'), default='full',
@@ -125,10 +126,26 @@ def parse_arguments(argv=None):
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--skip-post', action='store_true', help='Build and solve, without wavelength processing')
     parser.add_argument('--modal-audit', action='store_true', help='After reports, create the direct-shape audit and graphical explorer')
+    parser.add_argument('--modal-classifier', choices=('auto','screening','mfsm'), default='auto')
+    parser.add_argument('--mfsm-pack', help='Documented NPZ system/strain/search-space operators; enables audit')
     parser.add_argument('--check-inputs', action='store_true', help='Validate CSVs and settings only')
     parser.add_argument('--resume-post', metavar='RUN_DIR',
                         help='Verify completed run and postprocess its ODB; never build or submit')
     args = parser.parse_args(argv)
+    if args.modal_classifier=='mfsm' and not args.mfsm_pack:
+        parser.error('--modal-classifier mfsm requires --mfsm-pack')
+    if args.modal_classifier=='screening' and args.mfsm_pack:
+        parser.error('screening cannot use an mFSM pack')
+    if args.mfsm_pack:
+        args.mfsm_pack=os.path.abspath(os.path.expanduser(args.mfsm_pack))
+        args.modal_audit=True
+    import runtime_resources as resources
+    try:
+        args.resource_policy = resources.resolve_policy(resources.detect_resources(), args.cpus, args.gpus)
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
+    args.cpus = args.resource_policy.cpus
+    args.resource_policy = args.resource_policy.provenance()
     if args.longitudinal_lines not in [0] + list(range(2, 101)):
         parser.error('--longitudinal-lines must be 0 or an integer from 2 to 100')
     if (not math.isfinite(args.longitudinal_line_min_spacing_mm) or
@@ -244,7 +261,7 @@ def enhanced_arguments(report):
     return [os.path.splitext(report['odb'])[0]+'_modal_wavelengths_report.json']
 
 
-def run_modal_audit(run_dir):
+def run_modal_audit(run_dir, options=None):
     import importlib.util
     path = os.path.join(SCRIPT_DIR, 'abaqus_dsm_modal_audit.py')
     spec = importlib.util.spec_from_file_location('pipeline_modal_audit', path)
@@ -253,13 +270,17 @@ def run_modal_audit(run_dir):
     number = 2
     while os.path.exists(output):
         output = os.path.join(run_dir, 'modal_dsm_audit_%02d' % number); number += 1
-    summary = audit.process(audit.parse_arguments(['--run-dir', run_dir, '--output-dir', output]))
+    arguments=['--run-dir',run_dir,'--output-dir',output]
+    if options is not None:
+        arguments.extend(['--classifier',options.modal_classifier,'--cpus',str(options.cpus),'--gpus',str(options.resource_policy['gpus'])])
+        if options.mfsm_pack: arguments.extend(['--mfsm-pack',options.mfsm_pack])
+    summary = audit.process(audit.parse_arguments(arguments))
     return dict(output_dir=output, html=os.path.join(output, 'modal_explorer.html'),
                 eigenspace_validation=os.path.join(output, 'eigenspace_validation.html'),
                 mesh_shape_archive=summary.get('mesh_shape_archive'))
 
 
-def resume_postprocessing(run_dir, modal_audit=False):
+def resume_postprocessing(run_dir, modal_audit=False, audit_options=None):
     """Recover existing results without requiring source CSVs or a CAE session."""
     from types import SimpleNamespace
     run_dir = os.path.abspath(os.path.expanduser(run_dir))
@@ -296,7 +317,7 @@ def resume_postprocessing(run_dir, modal_audit=False):
         state['enhanced_report'] = enhanced.main(enhanced_arguments(report))
         if modal_audit:
             progress('AUDIT: direct shapes, sensitivity and graphical explorer.')
-            state['modal_audit'] = run_modal_audit(run_dir)
+            state['modal_audit'] = run_modal_audit(run_dir, audit_options)
         save('COMPLETED')
         progress('COMPLETE: recovered postprocessing; %d modes processed.' %
                  state['postprocessing']['processed_modes'])
@@ -639,7 +660,14 @@ def add_general_contact(model):
         assignments=((GLOBAL, SELF, 'Hard_Frictionless'),))
 
 
-def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full'):
+def build(inputs=None, cpus=None, buckle_output='standard', nodal_precision='full', resource_policy=None):
+    import runtime_resources as resources
+    if isinstance(resource_policy, dict):
+        inventory = resources.ResourceInventory(**resource_policy['inventory'])
+        resource_policy = resources.resolve_policy(inventory, resource_policy['cpus'], resource_policy['gpus'])
+    policy = resource_policy or resources.resolve_policy(resources.detect_resources(), cpus)
+    cpus = policy.cpus
+    resources.configure_threads(cpus)
     validate_settings()
     if inputs is None:
         inputs = read_model_inputs(BUILTUP_DIR)
@@ -652,7 +680,7 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     from abaqusConstants import (THREE_D, DEFORMABLE_BODY, ON, OFF, CARTESIAN,
         MIDDLE_SURFACE, FROM_SECTION, XYPLANE, XZPLANE, YZPLANE, QUAD,
         STRUCTURED, FIXED, S4R, STANDARD, SUBSPACE, SET, UNIFORM, GENERAL,
-        BEAM_MPC, DOF_MODE_MPC, MEGA_BYTES, FULL, SINGLE)
+        BEAM_MPC, DOF_MODE_MPC, PERCENTAGE, FULL, SINGLE)
     import mesh
     import regionToolset
     import interaction  # registers Model.MultipointConstraint in noGUI sessions
@@ -671,9 +699,10 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     model = mdb.Model(name=MODEL_NAME)
     assert hasattr(model, 'MultipointConstraint') and hasattr(mdb, 'Job')
     assert hasattr(model, 'fieldOutputRequests') and hasattr(model, 'historyOutputRequests')
-    job = mdb.Job(name=MODEL_NAME, model=MODEL_NAME, numCpus=cpus, numDomains=cpus,
-                  memory=24000, memoryUnits=MEGA_BYTES,
-                  nodalOutputPrecision=FULL if nodal_precision == 'full' else SINGLE)
+    gpu_supported = resources.supports_gpu_keyword(mdb.Job)
+    job_settings = resources.abaqus_job_settings(policy, {'numGPUs': gpu_supported})
+    job = mdb.Job(name=MODEL_NAME, model=MODEL_NAME, memoryUnits=PERCENTAGE,
+                  nodalOutputPrecision=FULL if nodal_precision == 'full' else SINGLE, **job_settings)
     model.Material(name='Steel')
     model.materials['Steel'].Elastic(table=((young, poisson),))
     model.HomogeneousShellSection(name='Shell_t', material='Steel', thickness=thickness,
@@ -851,7 +880,7 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     # Do not request S/E/SF/SE at every shell section point: those fields are
     # not used by the current Local/Distortional/Global classifier and can
     # dominate ODB size and postprocessing time for hundreds of modes.
-    model.FieldOutputRequest(name='ModeShapes', createStepName='Buckle', variables=('U',))
+    model.FieldOutputRequest(name='ModeShapes', createStepName='Buckle', variables=('U', 'UR'))
     for name in list(model.historyOutputRequests.keys()):
         del model.historyOutputRequests[name]
     job.writeInput(consistencyChecking=ON)
@@ -871,6 +900,10 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
         bolts_per_seam=len(bolts), rigid_links=len(model.constraints),
         boundary_conditions=len(model.boundaryConditions), loads=len(model.loads),
         reference_stress_MPa=1.0, submitted=False)
+    report['resources'] = policy.provenance()
+    report['resources']['abaqus_gpu_keyword_supported'] = gpu_supported
+    report['resources']['abaqus_gpu_request'] = job_settings.get('numGPUs', 0)
+    report['resources']['abaqus_memory_percent'] = 100
     report['contact'] = dict(type='General contact (Standard)', step='Initial',
         domain='All exterior surfaces, including self-contact', normal='HARD',
         tangential='FRICTIONLESS', allow_separation=True,
@@ -878,8 +911,8 @@ def build(inputs=None, cpus=8, buckle_output='standard', nodal_precision='full')
     report['source_inputs'] = input_summary(inputs)
     report['modal_output'] = dict(
         profile='classification_only', requested_legacy_profile=buckle_output,
-        nodal_precision=nodal_precision, fields=['U'],
-        mode_shape_components='U field used for transverse nodal eigenmode shapes; shell rotations are not required by the classifier',
+        nodal_precision=nodal_precision, fields=['U', 'UR'],
+        mode_shape_components='Global U and UR retained for energy-based mechanical mapping',
         deliberately_omitted_fields=['S', 'E', 'SF', 'SE'],
         convention='Normalized perturbation mode shapes only; shell stress/strain/force energy diagnostics are intentionally not stored in the automatic buckling stage')
     with open(MODEL_NAME+'_build.json', 'w') as f:
@@ -894,7 +927,9 @@ def main(argv=None):
     global LONGITUDINAL_LINES, LONGITUDINAL_LINE_MIN_SPACING_MM
     args = parse_arguments(argv)
     if args.resume_post:
-        return resume_postprocessing(args.resume_post, modal_audit=args.modal_audit)
+        if args.modal_audit:
+            return resume_postprocessing(args.resume_post, modal_audit=True, audit_options=args)
+        return resume_postprocessing(args.resume_post, modal_audit=False)
     BUILTUP_DIR, MESH_MM = args.builtup_dir, args.mesh_mm
     LONGITUDINAL_LINES = args.longitudinal_lines
     LONGITUDINAL_LINE_MIN_SPACING_MM = args.longitudinal_line_min_spacing_mm
@@ -933,7 +968,7 @@ def main(argv=None):
         progress('1/4 BUILD: geometry, mesh, contact, CAE and INP.')
         if args.buckle_output == 'detailed':
             progress('NOTE: --buckle-output detailed is retained only for command compatibility; S/E/SF/SE are no longer requested in this buckling stage.')
-        job, report = build(inputs=inputs, cpus=args.cpus,
+        job, report = build(inputs=inputs, cpus=args.cpus, resource_policy=args.resource_policy,
                             buckle_output=args.buckle_output, nodal_precision=args.nodal_precision)
         state['build'] = report
         save_state('BUILT')
@@ -976,7 +1011,7 @@ def main(argv=None):
             state['enhanced_report'] = enhanced.main(enhanced_arguments(report))
             if args.modal_audit:
                 progress('AUDIT: direct shapes, sensitivity and graphical explorer.')
-                state['modal_audit'] = run_modal_audit(output_dir)
+                state['modal_audit'] = run_modal_audit(output_dir, args)
         else:
             progress('3/4 and 4/4 POSTPROCESS skipped by --skip-post.')
         save_state('COMPLETED')

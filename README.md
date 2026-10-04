@@ -1,6 +1,11 @@
 # Alireza-1
 This is for mode classification
 
+See [mFSM status and operator contract](README_mfsm.md) and
+[full-resource execution](README_resource_execution.md). The new numerical backend
+requires supplied documented operators and physical validation before primary
+scientific/DSM activation.
+
 Run the combined model builder, solver, reports and modal audit from this folder:
 
 ```bat
@@ -13,7 +18,8 @@ abaqus cae noGUI=abaqus_complete_model_m20.py -- ^
   --n-modes 250 ^
   --n-vectors 500 ^
   --max-iterations 1250 ^
-  --cpus 8 ^
+  --cpus auto ^
+  --gpus auto ^
   --buckle-output detailed ^
   --nodal-precision full ^
   --longitudinal-lines 2 ^

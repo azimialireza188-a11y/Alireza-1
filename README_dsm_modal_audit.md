@@ -214,3 +214,12 @@ abaqus python abaqus_dsm_modal_audit.py --run-dir "مسیر نتایج" --basis 
 برچسب `SUPPORTED_BY_SUPPLIED_EVIDENCE` یعنی شواهد **ارائه‌شده** از کنترل‌های برنامه عبور کرده‌اند؛ گواهی مستقل مهندسی یا تأیید دامنهٔ کاربرد DSM نیست. کمینهٔ خانوادهٔ مشاهده‌نشده خالی می‌ماند. برای حالت ترکیبیِ فاقد مود مستقل، ممکن است تحلیل محدودشدهٔ خانواده لازم باشد که این برنامه انجام نمی‌دهد.
 
 منابع روش و محدودیت‌ها: [شناسایی مودهای FEM با پایه‌های cFSM، Li](https://www.ce.jhu.edu/cufsm/wp-content/uploads/2020/04/Finite-strip-modeling-of-thin-walled-members.pdf)، [کمانش مقدار ویژه در Abaqus](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEANLRefMap/simaanl-c-eigenbuckling.htm)، [تولید ماتریس‌ها و اثر قیود](https://docs.software.vt.edu/abaqusv2025/English/SIMACAEANLRefMap/simaanl-c-mtxgenerationgeneral.htm).
+
+
+## Supplied-operator mFSM backend
+
+Use `--classifier mfsm --mfsm-pack PATH` for a separate numerical energy report.
+See [README_mfsm.md](README_mfsm.md) for required U/UR, operator provenance, pending
+physical evidence and the explicit primary-classifier activation restriction.
+Resource defaults are all visible CPUs/GPUs with zero reserve; see
+[README_resource_execution.md](README_resource_execution.md).

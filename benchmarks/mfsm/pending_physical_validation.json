@@ -1,0 +1,21 @@
+{
+  "algorithm": "mfsm-energy-operators-v1",
+  "model_hash": null,
+  "status": "PENDING",
+  "checks": {
+    "source_derivation": false,
+    "published_benchmark": false,
+    "connection_limit": false,
+    "active_contact": false,
+    "abaqus_mesh": false,
+    "harmonic_convergence": false,
+    "eigenspace_match": false
+  },
+  "required_runs": [
+    "Reproduce the published channel and built-up fastener examples from verified input data",
+    "Compare the actual four-piece BEAM_MPC/base-state contact model on two Abaqus meshes",
+    "Refine reference mesh and longitudinal harmonic basis with matched eigenspaces",
+    "Require eigenvalue error <=0.5% and cluster share change <=1 percentage point",
+    "Compare CPU and every installed compatible GPU in FP64 with identical tolerances"
+  ]
+}
