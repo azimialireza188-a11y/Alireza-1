@@ -26,12 +26,18 @@ verification run.
 
 Batch sizes use live available RAM and estimated concurrently live working sets,
 with zero arbitrary safety reserve. Reduced mode history is disk-backed.
-Allocation failures during projection retry one mode at a time on CPU using
-already-read U/UR. A system unable to hold even one mode or the dense operators
+Allocation failures retry successively smaller views of the already-read U/UR;
+GPU buffers from failed frames are released before retry. A device uses live
+`memGetInfo` free bytes plus reusable allocator blocks, deducting persistent
+projector buffers only when not already resident. A one-mode GPU failure falls
+back to CPU. CPU fallbacks are serialized to avoid nested all-core BLAS. A system unable to hold even one mode or the dense operators
 fails explicitly; no mathematical tolerances or model physics are weakened.
 Full utilization depends on the algorithm and installed solver capabilities;
 allocating unused memory or doing slower GPU work is not an optimization.
 
 JSON records inventory, selected resources, zero reserve, backend timing/fallback,
-cache identity, batch size, retries and elapsed time. Use actual production timing
+cache identity, batch size, retries and stage elapsed time. Process RSS and
+peak are observed lifetime counters for the audit process, not the Abaqus solver
+workers. GPU telemetry reports live free/total capacity, used/retained allocator
+bytes and chunk sizes; it does not claim a sampled device-wide peak. Use actual production timing
 to assess speed; the repository does not claim an unmeasured optimal runtime.

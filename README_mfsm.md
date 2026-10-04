@@ -45,6 +45,8 @@ Load uses `allow_pickle=False`; save JSON metadata as a scalar string.
 | `K_system` | n × n symmetric positive-definite auxiliary reduced system metric |
 | `K_NAME` | n × n shell component operators named in metadata `components` |
 | `mapping` | n × r; maps raw ODB U/UR to the documented reduced coordinates |
+| `reconstruction` | r × n; compatible right inverse, `mapping @ reconstruction = I` |
+| `raw_metric_diagonal` | r positive dimensional norm weights; document translation/rotation unit scaling |
 | `instances`, `labels`, `dofs` | length r; unique instance / node / DOF keys; DOFs 1..6 required per node |
 | `coordinates` | r × 3; global undeformed node coordinates, repeated for each DOF |
 | `raw_constraints` | optional c × r; checked on raw vectors **before** reduction |
@@ -77,8 +79,14 @@ auxiliary-system energy shares, signed cross terms, closure/residual checks,
 backend/cache/resource provenance and elapsed time. Shares can sum beyond 100%
 when signed cross terms are present; closure includes those terms. Mixed and
 unresolved states are QC; only LOCAL/DISTORTIONAL/GLOBAL are family labels.
-Global subtype remains null without an independently verified mechanical
-bending/torsion/warping decomposition.
+Global subtype remains null without supplied reviewed mechanical flexural/torsional
+spaces. To provide them, include metadata `global_definition_review: true`,
+`global_source: {reference, equations, metric_definition}`, and
+`global_subspaces: ["FLEXURAL", "TORSIONAL"]`, plus `G_FLEXURAL` / `G_TORSIONAL`
+arrays in reduced coordinates. Their metric must match the main projector and
+their span must lie inside G. Per-mode and eigenspace subtype QC retain null when
+content is unresolved or a repeated eigenspace has no unique subtype. These
+inputs do not constitute independent scientific validation.
 
 Near-repeated modes use an orthonormal observed eigenspace, invariant trace shares
 and minimum/maximum bounds. A cluster touching the last available eigenmode has
@@ -98,9 +106,44 @@ inventories missing evidence and always stays pending until an independent
 artifact-based physical validation pipeline is implemented. No published example,
 actual-model Abaqus run or GPU hardware comparison passed on this host.
 
-Remaining implementation work also includes inverse/reconstruction checks for
-the supplied reduction map, automatic integration of assembly/seam diagnostics,
-live VRAM sizing and observed peak-memory telemetry. Current mapping validates
-provenance, coordinates, dimensions and per-mode constraints; it does not measure
-raw content discarded by a caller-supplied mapping matrix. See
-[the source map](docs/mfsm-source-map.md) for implemented versus missing physics.
+## Reconstruction, diagnostics and report integrity
+
+A supplied reduction map now needs `reconstruction` and `raw_metric_diagonal` to
+obtain resolved numerical labels. Both must be supplied together. The inverse
+identity is checked; each raw mode is reconstructed and compared in the supplied
+dimensional U/UR norm. `mapping_tolerance` defaults to 1e-8. Missing or failed
+reconstruction yields UNRESOLVED with no dominant family/subtype; it also clears
+stable cluster labels. Explicitly record how rotation weights convert radians
+to a norm compatible with translation units in pack provenance.
+
+Assembly diagnostics use the raw U of each mapped node, with instance names as
+piece identifiers, and never subtract relative piece motion before mechanical
+classification. Optional `diagnostic_seams` entries contain `a` / `b` keys as
+`[instance, label]` and `axes` as a 3x3 orthonormal matrix whose rows are opening,
+transverse-slip and longitudinal-slip directions. Components are signed raw
+amplitudes after removal of common rigid motion; arbitrary eigenvector scaling
+must be considered before comparing runs. `mfsm_mapping_assembly.csv` contains
+mapping QC and diagnostics with their separate nodal norm denominator.
+
+Every artifact is rendered in a staging directory before any target replacement.
+Files are atomically replaced individually, and JSON is committed last with
+SHA256 hashes of its artifacts. `mfsm_audit.load_report(directory)` verifies
+those hashes and rejects interrupted/mixed generations. This detects an
+interruption during multiple file replacements; it is not a filesystem-wide
+transaction. Existing runs still use new output directories.
+
+Live VRAM-based chunk sizing, smaller-batch allocation retries, lifetime process
+RSS/peak and GPU allocator snapshots are now implemented. Measured CPU topology
+tuning and automatic source-faithful hierarchy/S4R/MPC/contact extraction remain
+unfinished. See [the source map](docs/mfsm-source-map.md).
+
+Failed or missing reconstruction is handled before numerical projection, including
+fully discarded modes and rank-collapsed repeated clusters. The audit returns
+UNRESOLVED rows/clusters and continues reporting other valid modes. For a repeated
+cluster with indeterminate global subtype, accepted per-mode `global_subtype` is
+cleared; `observed_global_subtype` retains basis-dependent content as diagnostic
+and is explicitly flagged. The accepted subtype CSV column follows that gate.
+
+Remaining provenance polish: the subtype definition identifier should additionally
+bind subtype names and main metric identity. This does not change the system-bound
+basis cache or activate scientific acceptance.

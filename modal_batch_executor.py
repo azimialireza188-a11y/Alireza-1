@@ -74,3 +74,29 @@ def execute_device_batches(tasks, operation, device_ids):
                 index,device=pending.pop(future)
                 yield index,future.result()
                 submit(device)
+
+
+def device_batch_capacity(free_bytes,bytes_per_mode,persistent_bytes=0):
+    """Fit actual live device capacity, without a reserve percentage."""
+    return batch_capacity(free_bytes,bytes_per_mode,persistent_bytes)
+
+
+def retry_projection(items,operation,fallback=None,release=None):
+    """Retry smaller views only after actual allocation failure; keep order."""
+    retries=0
+    def run(values):
+        nonlocal retries
+        try:return operation(values)
+        except Exception as exc:
+            if not isinstance(exc,MemoryError) and type(exc).__name__!='OutOfMemoryError':raise
+            # Clear traceback-held partial buffers before allocating the retry.
+            import traceback
+            traceback.clear_frames(exc.__traceback__)
+            retries+=1
+            if release:release()
+            if len(values)==1:
+                if fallback:return fallback(values)
+                raise MemoryError('Projection cannot fit one mode') from None
+        middle=len(values)//2
+        return run(values[:middle])+run(values[middle:])
+    return run(items),retries

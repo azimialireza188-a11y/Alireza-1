@@ -3,7 +3,7 @@ import argparse,json,time
 import numpy as np
 from mfsm_model import BasisPack,ModeBatch
 from mechanical_modal_classifier import EnergyProjector,classify_modes
-from runtime_resources import detect_resources,resolve_policy,configure_threads
+from runtime_resources import detect_resources,resolve_policy,configure_threads,process_memory
 from modal_batch_executor import select_numpy_backend
 
 
@@ -24,7 +24,7 @@ def main():
         with context:
             start=time.perf_counter();rows=classify_modes(batch,basis,projector=projector,backend=backend);warm=time.perf_counter()-start
     result=dict(kind='SYNTHETIC_NUMERICAL_KERNEL_ONLY',scientifically_eligible=False,
-                resources=policy.provenance(),backend=info,dofs=args.dofs,modes=args.modes,
+                memory=process_memory(),resources=policy.provenance(),backend=info,dofs=args.dofs,modes=args.modes,
                 basis_seconds=cold,projection_seconds=warm,max_closure_error=max(r['closure_error'] for r in rows))
     with open(args.output,'w') as f:json.dump(result,f,indent=2)
     print(json.dumps(result))

@@ -125,3 +125,32 @@ def abaqus_job_settings(policy, capabilities):
     if policy.gpus and capabilities.get('numGPUs'):
         result['numGPUs']=policy.gpus
     return result
+
+
+def process_memory():
+    """Observed current-process RSS/peak, separate from resource requests."""
+    import sys
+    if os.name=='nt':
+        from ctypes import wintypes
+        class Counters(ctypes.Structure):
+            _fields_=[('cb',wintypes.DWORD),('PageFaultCount',wintypes.DWORD)]+[(k,ctypes.c_size_t) for k in
+                ('PeakWorkingSetSize','WorkingSetSize','QuotaPeakPagedPoolUsage','QuotaPagedPoolUsage',
+                 'QuotaPeakNonPagedPoolUsage','QuotaNonPagedPoolUsage','PagefileUsage','PeakPagefileUsage')]
+        counters=Counters();counters.cb=ctypes.sizeof(counters)
+        getprocess=ctypes.windll.kernel32.GetCurrentProcess
+        getprocess.restype=wintypes.HANDLE
+        fn=ctypes.windll.psapi.GetProcessMemoryInfo
+        fn.argtypes=[wintypes.HANDLE,ctypes.POINTER(Counters),wintypes.DWORD]
+        if not fn(getprocess(),ctypes.byref(counters),counters.cb):raise OSError('Cannot query process memory')
+        current=int(counters.WorkingSetSize);peak=int(counters.PeakWorkingSetSize)
+    else:
+        import resource
+        peak=int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)*(1 if sys.platform=='darwin' else 1024)
+        current=None
+        if os.path.exists('/proc/self/status'):
+            with open('/proc/self/status') as f:
+                for line in f:
+                    if line.startswith('VmRSS:'):current=int(line.split()[1])*1024
+                    if line.startswith('VmHWM:'):peak=max(peak,int(line.split()[1])*1024)
+    if current is not None:peak=max(peak,current)
+    return dict(current_rss_bytes=current,peak_rss_bytes=peak,scope='CURRENT_PROCESS_LIFETIME')

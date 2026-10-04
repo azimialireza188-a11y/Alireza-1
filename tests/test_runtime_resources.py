@@ -36,3 +36,12 @@ class ResourceTests(unittest.TestCase):
             r.configure_threads(24)
             import os
             self.assertEqual(os.environ['OMP_NUM_THREADS'],'24')
+    def test_observed_memory_is_finite_and_not_an_allocation_request(self):
+        stats=r.process_memory()
+        self.assertGreater(stats['peak_rss_bytes'],0)
+        if stats['current_rss_bytes'] is not None:self.assertGreaterEqual(stats['peak_rss_bytes'],stats['current_rss_bytes'])
+        self.assertEqual(stats['scope'],'CURRENT_PROCESS_LIFETIME')
+    def test_live_gpu_batch_uses_exact_free_bytes_and_working_sets(self):
+        from modal_batch_executor import device_batch_capacity
+        self.assertEqual(device_batch_capacity(1000,100,200),8)
+        with self.assertRaises(MemoryError):device_batch_capacity(250,100,200)

@@ -1,6 +1,11 @@
 {
   "kind": "SYNTHETIC_NUMERICAL_KERNEL_ONLY",
   "scientifically_eligible": false,
+  "memory": {
+    "current_rss_bytes": 59981824,
+    "peak_rss_bytes": 59981824,
+    "scope": "CURRENT_PROCESS_LIFETIME"
+  },
   "resources": {
     "cpus": 9,
     "gpus": 0,
@@ -8,7 +13,7 @@
       "logical_cpus": 9,
       "physical_cores": 9,
       "total_memory_bytes": 8589934592,
-      "available_memory_bytes": 8115113984,
+      "available_memory_bytes": 8138977280,
       "devices": []
     },
     "memory_reserve_bytes": 0,
@@ -22,7 +27,7 @@
   },
   "dofs": 300,
   "modes": 100,
-  "basis_seconds": 0.24061585200024638,
-  "projection_seconds": 0.08438547200012181,
+  "basis_seconds": 0.32315592700001616,
+  "projection_seconds": 0.001503999000078693,
   "max_closure_error": 1.4210854715202005e-15
 }

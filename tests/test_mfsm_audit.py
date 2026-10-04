@@ -46,10 +46,19 @@ class AuditTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path=os.path.join(root,'pack.npz')
             np.savez(path,metadata=json.dumps(metadata),instances=['P1']*6,labels=[1]*6,dofs=range(1,7),coordinates=np.zeros((6,3)),
-                mapping=mapping,K_system=np.eye(2),K_eps_x=np.diag([0.,1.]),K_eps_y=np.diag([1.,0.]),H_L=np.eye(2),H_D=np.eye(2),raw_constraints=[[0,1,0,0,0,0]])
+                mapping=mapping,reconstruction=mapping.T,raw_metric_diagonal=np.ones(6),K_system=np.eye(2),K_eps_x=np.diag([0.,1.]),K_eps_y=np.diag([1.,0.]),H_L=np.eye(2),H_D=np.eye(2),raw_constraints=[[0,1,0,0,0,0]])
             result=evaluate(odb,frames,summary,path,resources,os.path.join(root,'cache'))
             self.assertEqual([r['dominant_family'] for r in result['modes']],['LOCAL','DISTORTIONAL'])
             self.assertFalse(result['scientifically_eligible'])
+            self.assertEqual(result['modes'][0]['mapping_status'],'VERIFIED_RECONSTRUCTION')
+            self.assertIn('assembly_diagnostics',result['modes'][0])
+            frames[1].fieldOutputs['UR'].values[0].data=(1.,0.,0.)
+            failed=evaluate(odb,frames,summary,path,resources,os.path.join(root,'cache'))
+            self.assertEqual(failed['modes'][0]['mapping_status'],'FAILED_RECONSTRUCTION')
+            self.assertIsNone(failed['modes'][0]['dominant_family'])
+            self.assertFalse(failed['clusters'][0]['mapping_accepted'])
+            frames[1].fieldOutputs['UR'].values[0].data=(0.,0.,0.)
+
             self.assertTrue(result['clusters'][-1]['spectral_boundary_open'])
             summary['modes'][1]['eigenvalue']=1.5
             frames[1].fieldOutputs['U'].values[0].data=(np.sqrt(.95),0.,0.)

@@ -29,3 +29,21 @@ class DeviceQueueTests(unittest.TestCase):
         result=dict(execute_device_batches(range(8),work,[0,1]))
         self.assertEqual([result[i] for i in range(8)],[i*i for i in range(8)])
         self.assertEqual(seen,{0,1})
+
+class RetryTests(unittest.TestCase):
+    def test_allocation_retry_halves_work_and_preserves_order(self):
+        from modal_batch_executor import retry_projection
+        calls=[]
+        def op(x):
+            calls.append(len(x))
+            if len(x)>2:raise MemoryError('allocation')
+            return [int(i)*2 for i in x]
+        result,attempts=retry_projection(np.arange(7),op)
+        self.assertEqual(result,[i*2 for i in range(7)])
+        self.assertGreater(attempts,0)
+        self.assertEqual(calls[0],7)
+    def test_single_failure_is_explicit_and_can_fallback(self):
+        from modal_batch_executor import retry_projection
+        def op(x):raise MemoryError('one item')
+        result,retries=retry_projection(np.arange(2),op,fallback=lambda x:[int(x[0])])
+        self.assertEqual(result,[0,1]);self.assertGreater(retries,0)
