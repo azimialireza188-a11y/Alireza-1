@@ -304,3 +304,73 @@ units, L/D/G classifications or DSM eligibility are inferred. The raw ODB hash
 and source-stability assertion remain exporter claims, since only the portable
 archive was read. Actual S4R/component stiffness, active contact and physical
 harmonic mapping remain necessary before a production mFSM decomposition.
+
+### Automatic source mechanical preparation
+
+`prismatic_mfsm_operators.py` extracts a strictly extruded GLOBAL-Z cross section
+from expanded S4R connectivity without merging pieces across gaps. It constructs
+sparse auxiliary nu=0 operators from Part1 (2019) Eqs1-19: linear membrane, cubic
+Hermite bending, engineering twist, exact longitudinal sine/cosine orthogonality
+and four-point transverse Gauss integration. These are faceted CPT operators;
+Abaqus S4R stabilization, drill stiffness and transverse shear are not recreated.
+Canonical node DOFs are UX,UZ,UY,URZ. A source-map sign test checks URZ versus
+Hermite slope; full six-DOF reconstruction uses CPT slopes and facet-average
+membrane-curl drill rotations. That additional reconstruction is an explicitly
+unvalidated S4R mapping approximation.
+
+`portable_mfsm_preparation.py` reads and verifies the recovered Parquet format,
+checks mesh/hash/DOF/mode coverage, preserves signed eigenvalues, fits all modes
+with shared sine/cosine factorizations and checks inverse reconstruction and
+auxiliary component energy across harmonic enrichments. The default grows from
+one term to the station-resolved sine dimension; it has no arbitrary term cap.
+A separate constant-along-length warping field V0 extends the positive-harmonic
+source series. Its only strain energy is gamma_xy and uniform V0 remains a
+rigid-null field. This extension, facet averaging and the equal-section-node,
+trapezoid-station reconstruction norm (rotation length = thickness) are declared
+adaptations, not claims of reproduced paper benchmarks.
+
+```bat
+python -m pip install numpy scipy pyarrow threadpoolctl
+python portable_mfsm_preparation.py --portable-dir "portable_modal_export_recovered" --inp "BU_BOLT_L3600_M20(1).inp" --output-dir "mechanical_preparation_new"
+```
+
+Output is `mechanical_preparation.json` in a new directory. Input files are read
+only; source hashes are checked again before JSON-last publication. Missing
+rotations, nonfinite fields, inconsistent topology and changed sources fail
+explicitly. The sparse constraint projector applies the exact Euclidean action
+I-C.T(CC.T)^-1C on supported independent rows without allocating a dense raw Q.
+It is an initial kinematic diagnostic, not a contact tangent or energy metric.
+
+Assembly runs on all visible CPU processes, weighted inverses are factored once
+per parity, and reusable sparse matrices serve every mode. The numerical stage
+measures all-core BLAS versus all-core worker throughput and chooses the faster
+observed arrangement. Optional CuPy tests representative FP64 energies and
+reconstruction against CPU including transfers, and schedules all measured-faster
+GPUs; raw fields remain resident across harmonic levels. Allocation failure
+retries smaller mode subsets; GPU allocation failure has a recorded CPU fallback.
+Representative probe reads also reduce their Parquet column selection after actual
+allocation failure. Optional CPU topology tuning measures the live memory-fitting
+worker counts and selected BLAS budget; if concurrent tuning allocations fail,
+it retries fewer workers and can retain the feasible all-core serial run.
+No RAM/VRAM reserve percentage or standing savings ceiling is applied. Reported
+RSS/peak covers the parent process; process children are not included. Actual
+GPU/Windows execution remains unverified on this host.
+
+[Production preparation measurement](docs/mfsm-actual-mechanical-preparation.json):
+250 modes,9 visible CPUs,no GPU,1..183 harmonics,about12 seconds including assembly
+and topology probes,2.27GiB parent peak RSS. Sample throughput improved from
+0.881 to0.154 seconds (about5.7x); this is a measured preparation-stage comparison,
+not the total mFSM classifier runtime or a guarantee on another machine. The
+post-review run took12.016 seconds and its sample comparison was about5.4x.
+These measurements preceded external scratch cleanup; the recovered code passes
+fresh regression tests, but the250-mode archive could not be rerun after cleanup.
+All
+six-DOF reconstruction residuals were below0.44%, but247 modes changed auxiliary
+energy by more than0.5% between128 and183 terms. Those illustrative summaries
+are not AISI thresholds and do not establish strain-energy convergence.
+
+**Production L/D/G transition is still incomplete.** This command deliberately
+returns null families and UNAVAILABLE: it has not generated the actual admissible
+source hierarchy, verified active contact, reproduced physical S4R/curved
+benchmarks, or validated energy convergence. Source component energies must never
+be renamed L/D/G percentages or used as DSM minima.

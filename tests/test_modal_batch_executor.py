@@ -47,3 +47,17 @@ class RetryTests(unittest.TestCase):
         def op(x):raise MemoryError('one item')
         result,retries=retry_projection(np.arange(2),op,fallback=lambda x:[int(x[0])])
         self.assertEqual(result,[0,1]);self.assertGreater(retries,0)
+
+class BlasBudgetTests(unittest.TestCase):
+    def test_selected_blas_budget_is_applied_to_real_numeric_workers(self):
+        from threadpoolctl import threadpool_info
+        p=resolve_policy(ResourceInventory(4,4,100000,90000,[]),cpu_override=2)
+        def work(index):
+            result=np.ones((30,30))@np.ones((30,30))
+            active=[entry['num_threads'] for entry in threadpool_info()
+                    if entry['user_api']=='blas']
+            return result,active
+        for result,active in execute_batches(range(3),work,p,blas_threads=2):
+            np.testing.assert_allclose(result,30.)
+            self.assertTrue(active)
+            self.assertTrue(all(n==2 for n in active))

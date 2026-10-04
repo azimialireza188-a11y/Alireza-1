@@ -1,0 +1,166 @@
+{
+  "kind": "SOURCE_MECHANICAL_PREPARATION_NOT_CLASSIFICATION",
+  "source_inp_sha256": "2c0d2ca4a87e1664399d0e9d4d65551130c72c177944c4612b31b3c7eb8c4577",
+  "portable_manifest_sha256": "0fd8941259009c18ce78a80dfcf8b6cd3b1c21a3bd129269403775b60d970487",
+  "source_odb_sha256": "acfd8637f917e492adf94b4ac9ae96b1d9317ef5153dd18fd35c281dd3cce0bb",
+  "source_odb_hash_independently_verified": false,
+  "resources": {
+    "cpus": 9,
+    "gpus": 0,
+    "inventory": {
+      "logical_cpus": 9,
+      "physical_cores": 9,
+      "total_memory_bytes": 8589934592,
+      "available_memory_bytes": 6431227904,
+      "devices": []
+    },
+    "memory_reserve_bytes": 0,
+    "gpu_reserve_bytes": 0
+  },
+  "backend": {
+    "backend": "numpy_cpu",
+    "device": null,
+    "gpu_timings_seconds": [],
+    "reason": "NO_SUPPORTED_GPU"
+  },
+  "cpu_topology_timing": {
+    "single_all_core_seconds_per_sample": 0.8814161570003307,
+    "all_core_queue_seconds_per_sample": 0.15434212744447803,
+    "selected": "ALL_CPU_QUEUE_ONE_BLAS_THREAD_PER_WORKER"
+  },
+  "allocation_retries": {
+    "3": 0,
+    "0": 0,
+    "5": 0,
+    "2": 0,
+    "7": 0,
+    "6": 0,
+    "1": 0,
+    "4": 0,
+    "8": 0,
+    "13": 0,
+    "9": 0,
+    "10": 0,
+    "15": 0,
+    "12": 0,
+    "11": 0,
+    "16": 0,
+    "14": 0,
+    "17": 0,
+    "21": 0,
+    "19": 0,
+    "18": 0,
+    "20": 0,
+    "23": 0,
+    "22": 0,
+    "24": 0,
+    "25": 0,
+    "26": 0,
+    "31": 0,
+    "28": 0,
+    "29": 0,
+    "30": 0,
+    "27": 0
+  },
+  "physical_material": {
+    "E": 200000.0,
+    "nu": 0.3,
+    "thickness": 2.0
+  },
+  "auxiliary_material": {
+    "E": 200000.0,
+    "nu": 0.0,
+    "G": 100000.0,
+    "thickness": 2.0
+  },
+  "reference": {
+    "nodes": 220,
+    "strips": 216,
+    "stations": 185,
+    "length": 3600.0,
+    "origin": 0.0
+  },
+  "harmonic_counts": [
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    183
+  ],
+  "constant_warping_extension": "INDEPENDENT_V0_Y_CONSTANT_ONLY_GAMMA_XY;NOT_ORIGINAL_M_POSITIVE_SERIES",
+  "operator_build_seconds": 4.286901992999901,
+  "elapsed_seconds": 12.326285164000183,
+  "memory_before": {
+    "current_rss_bytes": 87736320,
+    "peak_rss_bytes": 87736320,
+    "scope": "CURRENT_PROCESS_LIFETIME"
+  },
+  "memory_after": {
+    "current_rss_bytes": 1125941248,
+    "peak_rss_bytes": 2435358720,
+    "scope": "CURRENT_PROCESS_LIFETIME"
+  },
+  "scientifically_eligible": false,
+  "default_classifier_activation": false,
+  "limitations": [
+    "Auxiliary CPT component energies are not L/D/G shares or physical S4R energies.",
+    "Initial projector is a Euclidean kinematic action, not a reduced stiffness metric or active-contact validation.",
+    "Facet-average drill/rotations and unweighted section-node reconstruction norm require independent mapping review.",
+    "Independent constant warping extends the m>=1 source series; shear energy and rigid-null field are explicit.",
+    "Published, S4R/contact and actual-family benchmarks remain unavailable; no primary method activation."
+  ],
+  "mode_count": 250,
+  "initial_projection_correction_max": 3.3306690738754696e-16,
+  "last_level_statistics": {
+    "canonical_relative_residual": {
+      "min": 1.7834071908809224e-13,
+      "median": 3.2525570179411525e-06,
+      "p95": 0.00022131646025335072,
+      "max": 0.000467255603569095
+    },
+    "raw_six_dof_relative_residual": {
+      "min": 1.5806105764252385e-05,
+      "median": 0.0028858982471033513,
+      "p95": 0.003544471082168404,
+      "max": 0.004395185920404538
+    },
+    "relative_energy_change": {
+      "min": 0.004369066783289145,
+      "median": 0.14963018212039642,
+      "p95": 0.9730388496811793,
+      "max": 0.9904910943230938
+    }
+  },
+  "mapping_above_5_percent_count": 0,
+  "energy_change_above_0_5_percent_count": 247,
+  "threshold_note": "5% and0.5% are illustrative QC summaries here, not code acceptance thresholds or AISI requirements.",
+  "unavailable_reasons": [
+    "ACTIVE_CONTACT_TANGENT_UNVERIFIED",
+    "S4R_CPT_MAPPING_UNVERIFIED",
+    "FACETED_CURVATURE_AND_MAIN_NODE_EQUILIBRIUM_UNREVIEWED",
+    "ADMISSIBLE_SOURCE_HIERARCHY_NOT_GENERATED"
+  ],
+  "algorithm": "SOURCE_CPT_PREPARATION_V1_WITH_SEPARATE_V0",
+  "measurement_provenance": {
+    "reviewed_run": "Observed before external scratch cleanup; original reviewed numerical implementation.",
+    "post_recovery_portable_rerun": false,
+    "reason": "Temporary raw archive and full run output were removed externally during publication; compact reviewed evidence recovered from review context. Fresh regression verification applies to recovered code."
+  },
+  "post_review_run_observed": {
+    "elapsed_seconds": 12.015827137,
+    "operator_build_seconds": 4.008890213,
+    "parent_current_rss_bytes": 1356226560,
+    "parent_peak_rss_bytes": 2610761728,
+    "all_core_seconds_per_sample": 0.655704753,
+    "parallel_seconds_per_sample": 0.12137163455559453,
+    "workers": 9,
+    "blas_threads_per_worker": 1,
+    "allocation_retries": 0,
+    "scientific_activation": false,
+    "note": "Observed after allocation fix and before scratch cleanup; later recovery did not rerun the actual250-mode archive."
+  }
+}

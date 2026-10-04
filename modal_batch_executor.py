@@ -7,11 +7,13 @@ import numpy as np
 from runtime_resources import available_memory,batch_capacity
 
 
-def execute_batches(batches,operation,policy,working_set_bytes=1):
+def execute_batches(batches,operation,policy,working_set_bytes=1,blas_threads=1):
+    if type(blas_threads) is not int or blas_threads<1:
+        raise ValueError('Positive integer BLAS thread budget required')
     workers=min(policy.cpus,batch_capacity(available_memory()[1],working_set_bytes))
     try:
         from threadpoolctl import threadpool_limits
-        limits=threadpool_limits(limits=1)
+        limits=threadpool_limits(limits=blas_threads)
     except ImportError:
         # Avoid nested all-core BLAS when the installed runtime cannot control it.
         workers=1;limits=nullcontext()
