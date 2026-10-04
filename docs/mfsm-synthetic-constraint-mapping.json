@@ -1,0 +1,60 @@
+{
+  "kind": "SYNTHETIC_CONSTRAINT_MAPPING_SCALE_ONLY",
+  "geometry_not_production": true,
+  "resources": {
+    "cpus": 9,
+    "gpus": 0,
+    "inventory": {
+      "logical_cpus": 9,
+      "physical_cores": 9,
+      "total_memory_bytes": 8589934592,
+      "available_memory_bytes": 7703339008,
+      "devices": []
+    },
+    "memory_reserve_bytes": 0,
+    "gpu_reserve_bytes": 0
+  },
+  "elapsed_seconds": 0.9747791999999436,
+  "memory": {
+    "current_rss_bytes": 129273856,
+    "peak_rss_bytes": 202792960,
+    "scope": "CURRENT_PROCESS_LIFETIME"
+  },
+  "mapping": {
+    "algorithm": "INITIAL_CPT_HARMONIC_CONSTRAINT_PULLBACK_V1",
+    "raw_constraint_shape": [
+      1777,
+      244200
+    ],
+    "harmonic_constraint_shape": [
+      1777,
+      161260
+    ],
+    "evaluated_raw_dofs": 2233,
+    "evaluation_nonzeros": 303944,
+    "constraint_nonzeros": 387544,
+    "sparse_storage_bytes": 4657640,
+    "cross_harmonic_constraints_retained": true,
+    "include_constant_warping": true,
+    "dense_raw_reconstruction_allocated": false,
+    "dense_nullspace_allocated": false,
+    "rank_verified": false,
+    "active_contact_verified": false,
+    "scientifically_eligible": false,
+    "limitation": "Initial C composed with declared CPT reconstruction; not an admissible basis or physical tangent.",
+    "zero_row_count": 881
+  },
+  "dense_square_coordinate_matrix_bytes": 208038300800,
+  "scientifically_eligible": false,
+  "scenario": {
+    "pieces": 4,
+    "nodes_per_piece_section": 55,
+    "stations": 185,
+    "spacing_mm": 20.0,
+    "length_mm": 3680.0,
+    "harmonics": 183,
+    "offset_beam_links": 76,
+    "geometry": "Synthetic two-leg angles shifted100mm per piece; not the production geometry.",
+    "boundary": "End translations1..3 on all nodes; one end URZ; no active-contact information."
+  }
+}

@@ -374,3 +374,25 @@ returns null families and UNAVAILABLE: it has not generated the actual admissibl
 source hierarchy, verified active contact, reproduced physical S4R/curved
 benchmarks, or validated energy convergence. Source component energies must never
 be renamed L/D/G percentages or used as DSM minima.
+
+### Coupled initial harmonic constraint diagnostics
+
+The preparation CLI now composes the actual initial BEAM/BC matrix with the
+declared six-DOF harmonic reconstruction: C_h = C_raw R. Only raw DOFs used by
+constraints are evaluated; all harmonic columns and the separately labeled V0
+are retained together. End-condition zero rows are identified without assuming
+independence. The largest map is constructed once and smaller harmonic levels
+reuse its column subsets. CPU/GPU parity probes include the new residuals.
+Each harmonic level reports its worst row-relative constraint cancellation
+residual and the change in each auxiliary strain-component energy. No mode or
+energy is silently corrected to improve either diagnostic.
+
+[Synthetic scale measurement](docs/mfsm-synthetic-constraint-mapping.json):
+1,777 constraints,244,200 raw DOFs and161,260 harmonic/V0 coordinates; the
+mapping took0.975 seconds and its CSR storage was4,657,640 bytes. This synthetic
+geometry only matches counts; it is not the actual production member or a
+classification benchmark. Full-coordinate rank/nullspace, physical S4R/contact
+equivalence and final family decomposition remain unverified. The earlier
+12-second production measurement predates this added diagnostic; updated
+production elapsed time has not been measured because scratch maintenance
+removed the uploaded INP/archive from the execution workspace.

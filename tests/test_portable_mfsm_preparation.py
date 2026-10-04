@@ -178,3 +178,35 @@ class PortablePreparationTests(unittest.TestCase):
             self.assertFalse(report['scientifically_eligible'])
             self.assertTrue(report['cpu_topology_timing']['allocation_fallback'])
             self.assertEqual(report['cpu_topology_timing']['workers'],1)
+
+    def test_kernel_checks_coupled_constraint_fit_without_changing_mode_or_energy(self):
+        import inspect
+        from scipy.sparse import csr_matrix
+        m=self.module()
+        self.assertIn('constraints',inspect.signature(m.PreparationKernel).parameters,
+                      'Harmonic constraint diagnostics are not integrated')
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);model,r=self.fixture(p);reader=m.PortableParquetModes(p,model)
+            keys=[(*key,dof) for key in model['nodes'] for dof in range(1,7)]
+            # A non-admissible observed field must be diagnosed, never corrected invisibly.
+            c=csr_matrix(([1.],([0],[keys.index(('P1',5,1))])),shape=(1,84))
+            plain=m.PreparationKernel(reader.reference,[1,2],200.,.3)
+            checked=m.PreparationKernel(reader.reference,[1,2],200.,.3,constraints=c,raw_keys=keys)
+            batch=reader.read_shard(0);before=plain.run(batch)[0];after=checked.run(batch)[0]
+            self.assertEqual(after['mode'],before['mode']);self.assertFalse(after['scientifically_eligible'])
+            self.assertFalse(checked.constraint_metadata['rank_verified'])
+            for a,b in zip(before['harmonic_convergence'],after['harmonic_convergence']):
+                self.assertEqual(a['auxiliary_energy'],b['auxiliary_energy'])
+                self.assertAlmostEqual(b['initial_harmonic_constraint_relative_residual'],1.)
+
+    def test_convergence_retains_each_strain_component_change(self):
+        m=self.module()
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d);model,r=self.fixture(p);reader=m.PortableParquetModes(p,model)
+            row=m.PreparationKernel(reader.reference,[1,2],200.,.3).run(reader.read_shard(0))[0]
+            first,last=row['harmonic_convergence']
+            self.assertIn('component_relative_energy_change',last,'Total energy hides component convergence')
+            self.assertIsNone(first['component_relative_energy_change'])
+            for name,value in last['component_relative_energy_change'].items():
+                prior=first['component_energies'][name];current=last['component_energies'][name]
+                self.assertAlmostEqual(value,abs(current-prior)/max(abs(current),abs(prior),1e-250))

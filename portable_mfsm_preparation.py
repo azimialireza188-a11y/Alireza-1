@@ -15,6 +15,7 @@ from prismatic_mfsm_operators import (extruded_reference,strip_operators,Canonic
     COMPONENTS,transverse_rotation_map,constant_warping_operator,ConstraintProjector)
 from runtime_resources import detect_resources,resolve_policy,process_memory,available_memory,batch_capacity,configure_threads
 from modal_batch_executor import select_numpy_backend,execute_batches,execute_device_batches
+from harmonic_constraint_mapping import compile_harmonic_constraints
 
 
 def file_hash(path):
@@ -131,7 +132,7 @@ def _child_threads():
 
 
 class PreparationKernel:
-    def __init__(self,reference,harmonic_counts,young,thickness,policy=None):
+    def __init__(self,reference,harmonic_counts,young,thickness,policy=None,constraints=None,raw_keys=None):
         self.reference=reference;self.counts=list(harmonic_counts);self.thickness=float(thickness);self.lock=threading.Lock();self.device_cache={}
         if (not self.counts or any(type(c) is not int or c<1 for c in self.counts) or
                 self.counts!=sorted(set(self.counts)) or self.counts[-1]>len(reference['stations'])-2):raise ValueError('Increasing station-resolved harmonic counts required')
@@ -149,15 +150,25 @@ class PreparationKernel:
             self.rotations[count]=transverse_rotation_map(r['xy'],r['edges'],list(range(1,count+1)),r['length'])
             n=count*len(r['xy'])*4
             self.level_components[count]={k:v[:n,:n] for k,v in self.components.items()}
+        self.constraint_maps={};self.constraint_metadata=None
+        if (constraints is None)!=(raw_keys is None):raise ValueError('Constraints and raw keys must be supplied together')
+        if constraints is not None:
+            full,self.constraint_metadata=compile_harmonic_constraints(constraints,raw_keys,r,terms)
+            constant_columns=np.arange(4*len(r['xy'])*self.counts[-1],full.shape[1])
+            for count in self.counts:
+                columns=np.concatenate([np.arange(4*len(r['xy'])*count),constant_columns])
+                self.constraint_maps[count]=full[:,columns]
         self.build_seconds=time.perf_counter()-start
 
     def _arrays(self,count,xp):
-        if xp is np:return self.level_components[count],self.rotations[count],self.constant_operator,self.constant_rotation
+        if xp is np:return self.level_components[count],self.rotations[count],self.constant_operator,self.constant_rotation,self.constraint_maps.get(count)
         key=(int(xp.cuda.runtime.getDevice()),count)
         with self.lock:
             if key not in self.device_cache:
                 from cupyx.scipy.sparse import csr_matrix as gpu_csr
-                self.device_cache[key]=({k:gpu_csr(v) for k,v in self.level_components[count].items()},gpu_csr(self.rotations[count]),gpu_csr(self.constant_operator),gpu_csr(self.constant_rotation))
+                constraint=self.constraint_maps.get(count)
+                self.device_cache[key]=({k:gpu_csr(v) for k,v in self.level_components[count].items()},gpu_csr(self.rotations[count]),gpu_csr(self.constant_operator),gpu_csr(self.constant_rotation),
+                    None if constraint is None else gpu_csr(constraint))
             return self.device_cache[key]
 
     def run(self,batch,xp=np):
@@ -165,7 +176,7 @@ class PreparationKernel:
         fields=xp.asarray(batch['canonical']);raw=xp.asarray(batch['raw_grid']);history=[];r=self.reference
         for count in self.counts:
             fit=self.fits[count].fit(fields,xp=xp,host_output=False);a=fit['coefficients'];v=a.reshape(count*len(r['xy'])*4,-1)
-            matrices,rotation,constant_matrix,constant_rotation=self._arrays(count,xp)
+            matrices,rotation,constant_matrix,constant_rotation,constraint=self._arrays(count,xp)
             constant=fit['constant_warping']
             energies=xp.stack([.5*xp.sum(v*(matrices[k]@v),axis=0) for k in COMPONENTS])
             energies[2]+=.5*xp.sum(constant*(constant_matrix@constant),axis=0)
@@ -183,20 +194,36 @@ class PreparationKernel:
             den=xp.sum((observed/scale)**2,axis=(0,1,2));num=xp.sum((difference/scale)**2,axis=(0,1,2))
             six_residual=xp.sqrt(xp.divide(num,den,out=xp.zeros_like(num),where=den>0))
             canonical_residual=fit['relative_residual']
-            if xp is not np:energies=xp.asnumpy(energies);six_residual=xp.asnumpy(six_residual);canonical_residual=xp.asnumpy(canonical_residual)
+            constraint_residual=None
+            if constraint is not None:
+                coefficients=xp.vstack([v,constant])
+                amplitude=xp.max(xp.abs(coefficients),axis=0)
+                coefficients=coefficients/xp.where(amplitude>0,amplitude,1.)
+                numerator=xp.abs(constraint@coefficients)
+                denominator=abs(constraint)@xp.abs(coefficients)
+                ratios=xp.divide(numerator,denominator,out=xp.zeros_like(numerator),where=denominator>0)
+                constraint_residual=xp.max(ratios,axis=0) if constraint.shape[0] else xp.zeros(coefficients.shape[1])
+            if xp is not np:
+                energies=xp.asnumpy(energies);six_residual=xp.asnumpy(six_residual);canonical_residual=xp.asnumpy(canonical_residual)
+                if constraint_residual is not None:constraint_residual=xp.asnumpy(constraint_residual)
             if not np.all(np.isfinite(energies)) or np.any(energies < -1e-10*np.maximum(np.max(np.abs(energies),axis=0),1e-250)):
                 raise ValueError('Nonfinite/negative auxiliary component energy')
-            history.append((count,np.maximum(energies,0),np.asarray(canonical_residual),np.asarray(six_residual)))
+            history.append((count,np.maximum(energies,0),np.asarray(canonical_residual),np.asarray(six_residual),constraint_residual))
         rows=[]
         for j,mode in enumerate(batch['modes']):
-            convergence=[];previous=None
-            for count,energies,canonical,six in history:
+            convergence=[];previous=None;previous_components=None
+            for count,energies,canonical,six,constraint_residual in history:
                 total=float(energies[:,j].sum())
                 convergence.append(dict(harmonics=count,canonical_relative_residual=float(canonical[j]),
                     raw_six_dof_relative_residual=float(six[j]),auxiliary_energy=total,
                     component_energies={k:float(energies[i,j]) for i,k in enumerate(COMPONENTS)},
-                    relative_energy_change=None if previous is None else abs(total-previous)/max(abs(total),abs(previous),1e-250)))
+                    relative_energy_change=None if previous is None else abs(total-previous)/max(abs(total),abs(previous),1e-250),
+                    component_relative_energy_change=None if previous_components is None else {
+                        k:abs(float(energies[i,j])-previous_components[i])/max(abs(float(energies[i,j])),abs(previous_components[i]),1e-250)
+                        for i,k in enumerate(COMPONENTS)},
+                    initial_harmonic_constraint_relative_residual=None if constraint_residual is None else float(constraint_residual[j])))
                 previous=total
+                previous_components=energies[:,j].tolist()
             rows.append(dict(mode=mode,eigenvalue=batch['eigenvalues'][j],source_method='MFSM_SOURCE_CPT_PREPARATION_ONLY',
                 dominant_family=None,global_subtype=None,quality_state='UNAVAILABLE',scientifically_eligible=False,
                 default_classifier_activation=False,unavailable_reasons=['ACTIVE_CONTACT_TANGENT_UNVERIFIED','S4R_CPT_MAPPING_UNVERIFIED',
@@ -300,15 +327,15 @@ def main():
     if root.exists():raise ValueError('Use a new output directory')
     root.mkdir(parents=True)
     material=physical_material(model);young=material['E'];nu=material['nu'];thickness=material['thickness']
-    with controls(policy.cpus):kernel=PreparationKernel(r,counts,young,thickness,policy)
     c,keys,meta=compile_initial_constraints(model);projector=ConstraintProjector(c)
+    with controls(policy.cpus):kernel=PreparationKernel(r,counts,young,thickness,policy,constraints=c,raw_keys=keys)
     lookup={(name,label,dof):i*6+dof-1 for i,(name,label) in enumerate(reader.nodekeys) for dof in range(1,7)}
     permutation=np.array([lookup[k] for k in keys]);sample,probe_loading=load_probe_sample(reader)
     probe_retries={}
     def probe(xp):
         rows,retries=run_sample_with_retry(lambda part:kernel.run(part,xp),sample)
         probe_retries['cpu' if xp is np else 'gpu']=retries
-        return np.array([[item for v in row['harmonic_convergence'] for item in ([v['canonical_relative_residual'],v['raw_six_dof_relative_residual']]+[v['component_energies'][k] for k in COMPONENTS])] for row in rows])
+        return np.array([[item for v in row['harmonic_convergence'] for item in ([v['canonical_relative_residual'],v['raw_six_dof_relative_residual'],v['initial_harmonic_constraint_relative_residual']]+[v['component_energies'][k] for k in COMPONENTS])] for row in rows])
     with controls(policy.cpus):xp,backend=select_numpy_backend(policy,probe)
     cpu_fallback_lock=threading.Lock();retry_counts={};retry_lock=threading.Lock()
     def work(index,device=None):
@@ -359,6 +386,7 @@ def main():
         source_odb_hash_independently_verified=False,resources=policy.provenance(),backend=backend,cpu_topology_timing=timing,probe_loading=probe_loading,probe_allocation_retries=probe_retries,allocation_retries=retry_counts,
         physical_material=dict(E=young,nu=nu,thickness=thickness),auxiliary_material=dict(E=young,nu=0.,G=young/2,thickness=thickness),
         reference=dict(nodes=len(r['xy']),strips=len(r['edges']),stations=len(r['stations']),length=r['length'],origin=r['origin']),
+        harmonic_constraint_mapping=kernel.constraint_metadata,
         harmonic_counts=counts,constant_warping_extension='INDEPENDENT_V0_Y_CONSTANT_ONLY_GAMMA_XY;NOT_ORIGINAL_M_POSITIVE_SERIES',operator_build_seconds=kernel.build_seconds,elapsed_seconds=time.perf_counter()-start,
         memory_before=memory,memory_after=process_memory(),rows=rows,scientifically_eligible=False,default_classifier_activation=False,
         limitations=['Auxiliary CPT component energies are not L/D/G shares or physical S4R energies.',
