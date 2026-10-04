@@ -1,0 +1,54 @@
+{
+  "kind": "ACTUAL_PORTABLE_DATA_INTEGRITY_AND_INITIAL_CONSTRAINT_QC",
+  "archive_sha256": "42a2c5f4552d2e1297bcbf57f69d71591e01718c9baf0adf1dac1586e67dac74",
+  "manifest_sha256": "0fd8941259009c18ce78a80dfcf8b6cd3b1c21a3bd129269403775b60d970487",
+  "source_inp_sha256": "2c0d2ca4a87e1664399d0e9d4d65551130c72c177944c4612b31b3c7eb8c4577",
+  "source_odb_sha256": "acfd8637f917e492adf94b4ac9ae96b1d9317ef5153dd18fd35c281dd3cce0bb",
+  "source_odb_hash_independently_verified": false,
+  "source_stability_exporter_claim": true,
+  "artifact_hashes_verified": 36,
+  "mesh_topology_matches_inp": true,
+  "max_abs_coordinate_difference": 4.0625000110594556e-06,
+  "mode_count": 250,
+  "node_count": 40700,
+  "element_count": 39744,
+  "raw_dof_count": 244200,
+  "all_U_UR_finite": true,
+  "all_mode_columns_float64": true,
+  "eigenvalue_range": [
+    268.78,
+    391.2
+  ],
+  "initial_constraint_shape": [
+    1777,
+    244200
+  ],
+  "constraint_residual_definition": "Within each translation/rotation and BEAM/BC row group: max(abs(C_group u))/max(abs(C_group) abs(u)); zero/zero=0. Initial algebraic diagnostic only, not a dimensional energy norm or active-tangent validation.",
+  "constraint_summary": {
+    "beam_translation": {
+      "max_abs_residual": 9.43689570931383e-16,
+      "max_relative_group_residual": 3.220843507406831e-15
+    },
+    "beam_rotation": {
+      "max_abs_residual": 0.0,
+      "max_relative_group_residual": 0.0
+    },
+    "boundary_translation": {
+      "max_abs_residual": 0.0,
+      "max_relative_group_residual": 0.0
+    },
+    "boundary_rotation": {
+      "max_abs_residual": 0.0,
+      "max_relative_group_residual": 0.0
+    }
+  },
+  "scientifically_eligible": false,
+  "default_classifier_activation": false,
+  "limitations": [
+    "Raw ODB was not read; its reported hash and source-stability claim cannot be independently checked from this archive.",
+    "Coordinate tolerance is exporter matching tolerance; coordinates are stored as float64 but appear quantized by source output.",
+    "Eigenvalues come from exported descriptions; extra digits are not reconstructed and stress units are not inferred.",
+    "Initial BEAM/BC residuals do not establish active contact, S4R stiffness, material/load/history equivalence or mFSM family classification."
+  ],
+  "per_mode_qc_count": 250
+}

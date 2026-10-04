@@ -284,3 +284,23 @@ manifest. This detects observed changes; it does not acquire an exclusive source
 lock. Topology agreement does not establish material/load/history equivalence.
 The in-memory test API has `source_stability_verified=false` unless a successful
 source guard is supplied; the CLI supplies this guard.
+
+### Recovered production modal data (2026-10-04)
+
+The subsequent recovered Parquet archive was received and inspected successfully;
+the raw ODB transfer failure no longer blocks access to its exported mode vectors.
+[Actual portable audit](docs/mfsm-actual-portable-audit.json) records all36 verified
+artifact hashes,250 complete FP64 U/UR modes,40,700 matching nodes and39,744
+matching S4R elements. Every shard was read and all values checked for finiteness.
+The source INP hash matches the previously inspected input. Raw node-major DOFs
+were reordered by instance/label/DOF before applying the sparse initial C.
+The worst group-relative BEAM translation residual was3.220843507406831e-15;
+BEAM rotation and mode boundary-condition residuals were zero. These checks
+validate initial algebraic compatibility, not active-contact tangent equivalence.
+
+Exported eigenvalues range from268.78 to391.20 and retain the precision present
+in the exported mode descriptions. They are load multipliers here; no stress
+units, L/D/G classifications or DSM eligibility are inferred. The raw ODB hash
+and source-stability assertion remain exporter claims, since only the portable
+archive was read. Actual S4R/component stiffness, active contact and physical
+harmonic mapping remain necessary before a production mFSM decomposition.
