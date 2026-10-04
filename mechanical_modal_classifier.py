@@ -71,7 +71,7 @@ def classify_modes(batch,basis,thresholds=None,policy=None,projector=None,backen
             quality_state=quality,global_subtype=None,shares_percent=shares,cross_percent=cross,
             relative_residual=float(result['relative_residual'][j]),closure_error=result['closure_error'],
             condition=result['condition'],flags=flags,scientifically_eligible=False,
-            source_method='MFSM_SUPPLIED_OPERATOR_SEARCH_SPACES',metric_definition='AUXILIARY_SYSTEM_ENERGY_NU_ZERO'))
+            source_method=basis.metadata.get('source_method','MFSM_SUPPLIED_OPERATOR_SEARCH_SPACES'),metric_definition='AUXILIARY_SYSTEM_ENERGY_NU_ZERO'))
     if global_projector is not None and global_projector.basis.metadata.get('mechanical_definition_review') is True:
         if global_projector.metric.shape!=projector.metric.shape or not np.allclose(global_projector.metric,projector.metric,rtol=1e-12,atol=1e-12):
             raise ValueError('Global subtype metric mismatch')

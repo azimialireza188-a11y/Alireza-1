@@ -47,10 +47,40 @@ def load_operator_pack(path,odb,odb_hash,signature):
             SourceDefinition(**meta['source']),dict(meta))
         mapping=matrix(data['mapping'],len(operators.system))
         if mapping.shape[1]!=len(keys): raise ValueError('Reduced/raw DOF map mismatch')
-        spaces={}
-        for name,spec in meta['spaces'].items():
-            spaces[name]=dict(spec,search_basis=data['H_'+name])
-            if 'C_'+name in data: spaces[name]['constraints']=data['C_'+name]
+        spaces={};hierarchy=None
+        construction=meta.get('basis_construction','SUPPLIED_SEARCH_SPACES')
+        if construction=='KHEZRI_2019_HIERARCHY':
+            hierarchy=dict(meta['hierarchy'])
+            equilibrium=hierarchy.get('equilibrium_construction','SUPPLIED_Z_TE')
+            if equilibrium=='APPENDIX_A1_ROWS':
+                from source_mfsm_hierarchy import transverse_equilibrium_rows
+                if 'Z_te' in data: raise ValueError('Ambiguous supplied/derived transverse equilibrium')
+                canonical=data['K_kappa_x_canonical'];q=matrix(data['canonical_reduction'],len(canonical))
+                if q.shape[1]!=len(operators.system): raise ValueError('Canonical reduction DOF mismatch')
+                expected=q.T@canonical@q;actual=operators.components['kappa_x']
+                if not np.allclose(expected,actual,rtol=1e-10,atol=max(np.max(np.abs(actual)),1e-250)*1e-12):
+                    raise ValueError('Canonical/reduced kappa_x mismatch')
+                hierarchy['transverse_equilibrium']=transverse_equilibrium_rows(canonical,data['unprescribed_rows'],q)
+                hierarchy['coordinate_metric']=q.T@q
+            elif equilibrium=='SUPPLIED_Z_TE':
+                if 'Z_te' not in data: raise ValueError('Source hierarchy requires transverse equilibrium Z_te')
+                hierarchy['transverse_equilibrium']=data['Z_te'].copy()
+            else: raise ValueError('Unsupported equilibrium construction')
+            if 'K_gamma_open' in data: hierarchy['gamma_open']=data['K_gamma_open'].copy()
+            if 'warping_projection' in data: hierarchy['warping_projection']=data['warping_projection'].copy()
+            if 'S_open' in data: hierarchy['open_shear_basis']=data['S_open'].copy()
+            if 'coordinate_metric' in data:
+                if equilibrium=='APPENDIX_A1_ROWS' and not np.allclose(
+                    hierarchy['coordinate_metric'],data['coordinate_metric'],rtol=1e-10,atol=1e-12):
+                    raise ValueError('Canonical Euclidean metric mismatch')
+                hierarchy['coordinate_metric']=data['coordinate_metric'].copy()
+            if meta.get('spaces') or meta.get('global_subspaces'):
+                raise ValueError('Source hierarchy cannot be combined with supplied family/subtype bases')
+        elif construction=='SUPPLIED_SEARCH_SPACES':
+            for name,spec in meta['spaces'].items():
+                spaces[name]=dict(spec,search_basis=data['H_'+name])
+                if 'C_'+name in data: spaces[name]['constraints']=data['C_'+name]
+        else: raise ValueError('Unsupported basis construction')
         constraints=matrix(data['raw_constraints']) if 'raw_constraints' in data else None
         if constraints is not None and constraints.shape[1]!=len(keys): raise ValueError('Raw constraint DOF mismatch')
         inverse=data['reconstruction'].copy() if 'reconstruction' in data else None
@@ -61,7 +91,7 @@ def load_operator_pack(path,odb,odb_hash,signature):
             global_spaces={name:data['G_'+name].copy() for name in meta.get('global_subspaces',[])}
             if any(name not in ('FLEXURAL','TORSIONAL') for name in global_spaces):
                 raise ValueError('Unsupported global subtype space')
-        adapter=dict(reconstruction=inverse,raw_metric_diagonal=diagonal,coordinates=coords.copy(),metadata=meta,global_spaces=global_spaces)
+        adapter=dict(reconstruction=inverse,raw_metric_diagonal=diagonal,coordinates=coords.copy(),metadata=meta,global_spaces=global_spaces,hierarchy=hierarchy)
         if (inverse is None)!=(diagonal is None): raise ValueError('Reconstruction and dimensional metric must be supplied together')
         return operators,spaces,mapping,keys,constraints,adapter
 
@@ -104,9 +134,15 @@ def evaluate(odb,frames,summary,pack_path,resource_metadata,cache_dir,thresholds
     from abaqus_modal_harmonics import map_modes
     with context:
         basis_start=time.perf_counter()
-        basis,cache=cached_mfsm_basis(operators,spaces,cache_dir,policy)
+        subtype_basis=None
+        if adapter['hierarchy'] is not None:
+            from source_mfsm_hierarchy import cached_source_hierarchy
+            basis,subtype_basis,cache=cached_source_hierarchy(operators,adapter['hierarchy'],cache_dir)
+        else:
+            basis,cache=cached_mfsm_basis(operators,spaces,cache_dir,policy)
         projector=EnergyProjector(basis)
-        global_projector=None
+        global_projector=EnergyProjector(subtype_basis) if subtype_basis is not None and any(
+            space.shape[1] for space in subtype_basis.spaces.values()) else None
         if adapter['global_spaces']:
             from mfsm_model import BasisPack,content_hash
             global_projector=EnergyProjector(BasisPack(basis.metric,adapter['global_spaces'],
