@@ -114,3 +114,38 @@ Final: Ruling: actual production runtime/energy convergence were not certified �
 Final: Ruling: Windows/CUDA/multi-GPU/device OOM behavior was not certified — corresponding runtimes unavailable — cost is unverified hardware portability/performance; added GPU parity probe coverage is not a native-device test.
 Final: Ruling: wider unsupported MPCs, persistent cross-layout caches and interrupted-report recovery were not recertified — unchanged outside this stage and no connection-basis cache introduced — cost is reliance on prior safeguards rather than new evidence for these paths.
 Final: Ruling: ODB provenance, published benchmarks and DSM applicability were not certified — no new corresponding artifacts — cost is no scientific publication/DSM activation from these diagnostics.
+
+### Portable numerical analysis continuation
+
+`portable_mfsm_analysis.py` connects verified Parquet U/UR to the existing
+supplied-pack mFSM hierarchy/projector, mapping and assembly diagnostics,
+invariant cluster analysis, and atomic JSON/CSV/PNG reporting. The ODB entry
+point shares the same engine; no fake ODB object or visual classifier is used.
+The portable route additionally binds the pack to the exact INP hash, requires
+a complete six-DOF raw map, and independently checks supported initial BEAM/BC
+constraints. Export and pack hashes are rechecked after analysis, and the CLI
+refuses historical output directories. All visible resources and zero reserves
+remain the default; allocation retries also cover Parquet extraction.
+
+Seven new tests use real synthetic Parquet files and exercise reordered raw
+maps, signed eigenvalues, report checksum verification, provenance rejection,
+omitted-node rejection, independent BC rejection, pack-change rejection,
+allocation retry and the actual CLI without Abaqus. These are executable
+integration checks, not production physics or hardware benchmarks.
+
+Remaining completion blockers are unchanged: automatic physical S4R/contact
+operators, scalable complete admissible hierarchy, actual-model strain-energy
+convergence, independent published/actual-model validation and scientific
+activation. Original actual input/modal bytes are unavailable in this checkout;
+no updated actual-model timing or labels are claimed.
+
+Final independent review passed all239 tests and diff checks, with no Critical
+or Important findings. Two Minor items are deferred: the native ODB callback's
+column stacking transiently duplicates extracted raw columns; allocation retry
+recovers with a smaller batch. Also common-engine elapsed/RSS-before telemetry
+now starts after operator loading, and `operator_load_and_adapter_setup` includes
+adapter setup only. These timings are not full CLI/ODB wall times. Review did
+not certify native Abaqus, Windows/CUDA/multi-GPU, device exhaustion, production
+performance, original ODB provenance, physical operators/hierarchy/convergence,
+published benchmarks or DSM eligibility. No updated actual-model benchmark is
+claimed.

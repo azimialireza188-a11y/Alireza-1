@@ -396,3 +396,42 @@ equivalence and final family decomposition remain unverified. The earlier
 12-second production measurement predates this added diagnostic; updated
 production elapsed time has not been measured because scratch maintenance
 removed the uploaded INP/archive from the execution workspace.
+
+## Portable Parquet analysis with a documented operator pack
+
+The portable export can now use the same numerical classifier and report engine
+as the ODB adapter, without installing Abaqus:
+
+```bat
+python portable_mfsm_analysis.py --portable-dir "D:\exports\actual" --inp "D:\models\actual.inp" --mfsm-pack "D:\operators\actual.npz" --output-dir "D:\reports\mfsm-new"
+```
+
+Install NumPy, SciPy, pyarrow, matplotlib and threadpoolctl in that Python
+environment. CuPy is optional for a compatible CUDA runtime. The command uses
+all visible CPUs and considers all visible GPUs under the existing measured
+FP64 backend policy, with zero RAM/VRAM reserves. Allocation failures retry a
+smaller mode batch; this is capacity recovery, not a standing utilization cap.
+The output directory must be new. `--cache-dir PATH` optionally selects the
+existing content-addressed basis cache.
+
+The NPZ schema is the documented supplied-operator schema above, additionally
+requiring `metadata.source_inp_sha256` to match the exact input bytes. Its raw
+map must include every portable node and all six DOFs; its order may differ.
+The export's source ODB hash, global coordinates, complete topology, artifact
+hashes, U/UR fields and mode table are checked before analysis. Independently
+compiled initial BEAM/BC constraints are applied even if the pack omits
+`raw_constraints`. Unsupported initial constraints fail explicitly.
+
+Outputs are `mfsm_audit.json`, `mfsm_percentages.csv`,
+`mfsm_mapping_assembly.csv` and `mfsm_percentages.png`, with checksums in the
+JSON commit record. Eigenvalues retain their signed exported values. Close
+clusters use the existing invariant eigenspace analysis; the last observed
+spectral boundary remains open. Source files are checked again before the
+report is published. Read reports with `mfsm_audit.load_report` to verify hashes.
+
+This completes the portable **supplied-operator execution route**. It does not
+construct the production S4R/contact tangent or the complete scalable
+compatible family hierarchy. Supplying review flags is not independent
+physical evidence. Results retain `scientifically_eligible=false` and cannot
+be treated as validated AISI/DSM inputs. The actual-model physical classifier
+and benchmark activation remain unfinished as recorded in the status document.

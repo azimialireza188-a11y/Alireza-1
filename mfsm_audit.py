@@ -19,7 +19,7 @@ def availability(pack_path):
                            'source modal hierarchy','published and actual-model benchmarks'])
 
 
-def load_operator_pack(path,odb,odb_hash,signature):
+def load_operator_pack(path,odb,odb_hash,signature,*,node_coordinates=None):
     with np.load(path,allow_pickle=False) as data:
         meta=json.loads(str(data['metadata'].item()))
         if meta.get('source_odb_sha256')!=odb_hash or meta.get('model_signature')!=signature or not signature:
@@ -39,8 +39,11 @@ def load_operator_pack(path,odb,odb_hash,signature):
             raise ValueError('Full U+UR data required for every mapped node')
         coords=matrix(data['coordinates'],len(keys))
         if coords.shape[1]!=3: raise ValueError('Mapped coordinates must be 3D')
-        lookup={name:{n.label:n.coordinates for n in odb.rootAssembly.instances[name].nodes} for name in {k[0] for k in keys}}
-        actual=np.array([lookup[name][label] for name,label,unused in keys])
+        if node_coordinates is None:
+            lookup={name:{n.label:n.coordinates for n in odb.rootAssembly.instances[name].nodes} for name in {k[0] for k in keys}}
+            node_coordinates={(name,label):coords for name,nodes in lookup.items() for label,coords in nodes.items()}
+        try:actual=np.array([node_coordinates[(name,label)] for name,label,unused in keys])
+        except KeyError as exc:raise ValueError('Operator node absent from source geometry') from exc
         if not np.allclose(coords,actual,rtol=0,atol=max(1e-5,1e-6*np.max(np.abs(actual)))):
             raise ValueError('Operator coordinates differ from ODB')
         operators=OperatorPack(data['K_system'],{k:data['K_'+k] for k in meta['components']},
@@ -97,14 +100,22 @@ def load_operator_pack(path,odb,odb_hash,signature):
 
 
 def evaluate(odb,frames,summary,pack_path,resource_metadata,cache_dir,thresholds=None):
+    """Native ODB entry point; extraction remains on the calling thread."""
+    from abaqus_dsm_modal_audit import read_mapped_mode
+    loaded=load_operator_pack(pack_path,odb,summary['source_odb_sha256'],summary['model_signature'])
+    def read_vectors(selected,keys):
+        return np.column_stack([read_mapped_mode(frames[mode],keys) for mode in selected])
+    return evaluate_loaded(summary,loaded,read_vectors,resource_metadata,cache_dir,thresholds)
+
+
+def evaluate_loaded(summary,loaded,read_vectors,resource_metadata,cache_dir,thresholds=None):
     from mfsm_reference_basis import cached_mfsm_basis
     from mechanical_modal_classifier import EnergyProjector,classify_modes,classify_cluster
     thresholds=dict(dict(dominance=.9,max_residual=.05,cluster_tolerance=.001),**(thresholds or {}))
     memory_before=process_memory()
     start=time.perf_counter()
     phase_seconds={}
-    operators,spaces,mapping,keys,constraints,adapter=load_operator_pack(
-        pack_path,odb,summary['source_odb_sha256'],summary['model_signature'])
+    operators,spaces,mapping,keys,constraints,adapter=loaded
     from modal_reconstruction import ReconstructionCheck
     from assembly_projector import assembly_diagnostics
     reconstruction=None
@@ -130,7 +141,7 @@ def evaluate(odb,frames,summary,pack_path,resource_metadata,cache_dir,thresholds
         context=threadpool_limits(limits=policy.cpus)
     except ImportError:
         context=nullcontext()
-    from abaqus_dsm_modal_audit import read_mapped_mode,close_clusters
+    from abaqus_dsm_modal_audit import close_clusters
     from abaqus_modal_harmonics import map_modes
     with context:
         basis_start=time.perf_counter()
@@ -162,18 +173,22 @@ def evaluate(odb,frames,summary,pack_path,resource_metadata,cache_dir,thresholds
         with tempfile.TemporaryDirectory(prefix='mfsm-modes-') as directory:
             retained=np.memmap(os.path.join(directory,'vectors.bin'),dtype='float64',mode='w+',shape=(n,len(ids)))
             def batches():
+                nonlocal retries
                 offset=0
                 while offset<len(ids):
                     extraction_start=time.perf_counter()
                     live=min(capacity,len(ids)-offset,batch_capacity(available_memory()[1],bytes_per_mode*max(1,policy.gpus)))
                     while True:
                         try:
-                            vectors=np.empty((len(keys),live),dtype=np.float64);break
+                            selected=ids[offset:offset+live]
+                            vectors=matrix(read_vectors(selected,keys),len(keys))
+                            if vectors.shape[1]!=live:raise ValueError('Raw source mode count mismatch')
+                            break
                         except MemoryError:
+                            retries+=1
                             if live==1:raise
                             live=max(1,live//2)
                     selected=ids[offset:offset+live]
-                    for j,mode in enumerate(selected):vectors[:,j]=read_mapped_mode(frames[mode],keys)
                     raw=ModeBatch(vectors,tuple(selected))
                     if constraints is not None:
                         check_constraints_per_mode(raw.vectors,constraints)

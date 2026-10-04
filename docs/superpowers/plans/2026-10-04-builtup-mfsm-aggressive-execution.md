@@ -203,3 +203,14 @@ Tasks 1–6 establish scientifically meaningful operators/bases. Task 7 adds cla
 No resource tuning changes the physical model or relaxes numerical acceptance. Resource usage is unrestricted by savings/reservation policies, while scheduler choices optimize measured elapsed time.
 
 Required next step under Superpowers: the user reviews this written plan and selects Native or Subagent-driven execution before implementation. Native is recommended. Approval of this plan authorizes task-by-task implementation and the direct GitHub integration already requested.
+
+## Authorized continuation: portable supplied-operator execution
+
+Connect the already verified portable reader to the existing classification
+and report engine. Preserve the ODB API, source-derived/supplied hierarchy
+options, reconstruction acceptance, repeated-eigenspace QC and scientific
+activation gates. Require exact INP/ODB binding and complete raw maps; check
+initial INP constraints independently. Use actual synthetic Parquet integration
+tests, CLI execution and allocation-retry tests before final independent review
+and direct publication. This implements the portable part of Tasks 7–8, not the
+missing physical generation/validation portions of Tasks 3–6 and 9.
