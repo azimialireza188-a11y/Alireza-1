@@ -1,0 +1,76 @@
+{
+  "algorithm": "mfsm-inp-initial-constraints-v2",
+  "input_sha256": "2c0d2ca4a87e1664399d0e9d4d65551130c72c177944c4612b31b3c7eb8c4577",
+  "part_count": 1,
+  "instance_count": 4,
+  "node_count": 40700,
+  "element_count": 39744,
+  "element_type": "S4R",
+  "mpc_count": 76,
+  "mpc_types": [
+    "BEAM"
+  ],
+  "sections": [
+    {
+      "part": "COLUMNPIECE",
+      "definition": {
+        "ELSET": "_PickedSet47",
+        "MATERIAL": "Steel"
+      },
+      "data": [
+        "2., 5"
+      ]
+    }
+  ],
+  "elastic": [
+    {
+      "definition": {},
+      "data": [
+        "200000., 0.3"
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "name": "BUCKLE",
+      "attrs": {
+        "NAME": "Buckle",
+        "NLGEOM": "NO"
+      },
+      "flags": [
+        "PERTURBATION"
+      ],
+      "buckle_data": [
+        "250",
+        "",
+        "500",
+        "1250"
+      ]
+    }
+  ],
+  "requested_modes": 250,
+  "general_contact_defined": true,
+  "contact_state": "UNKNOWN_REQUIRES_BASE_STATE_EVIDENCE",
+  "rotation_output_status": "REQUIRES_ODB_FIELD_INSPECTION",
+  "scientifically_eligible": false,
+  "default_classifier_activation": false,
+  "constraints": {
+    "algorithm": "mfsm-inp-initial-constraints-v2",
+    "input_sha256": "2c0d2ca4a87e1664399d0e9d4d65551130c72c177944c4612b31b3c7eb8c4577",
+    "beam_rows": 456,
+    "boundary_rows": 1321,
+    "coordinate_definition": "GLOBAL_INITIAL_U1_U2_U3_UR1_UR2_UR3_NODE_MAJOR",
+    "boundary_selection": "BUCKLE_LOAD_CASE_2_OP_NEW",
+    "active_base_state_verified": false,
+    "scientifically_eligible": false,
+    "contact_state": "UNKNOWN_REQUIRES_BASE_STATE_EVIDENCE",
+    "limitation": "Initial kinematics only; no contact/S4R tangent or nullspace/dense reduction constructed",
+    "shape": [
+      1777,
+      244200
+    ],
+    "nnz": 2537,
+    "storage_bytes": 37556
+  },
+  "inspection_note": "Actual uploaded INP inspected. ODB transfer failed; no actual eigenmode, contact or Abaqus runtime verification performed."
+}

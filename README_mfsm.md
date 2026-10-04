@@ -224,3 +224,63 @@ and is explicitly flagged. The accepted subtype CSV column follows that gate.
 The new source-hierarchy subtype identifier binds names, metric and main basis
 identity. The earlier supplied-subtype path still has the deferred provenance
 polish noted in the implementation ledger; neither path activates acceptance.
+
+## Actual INP inspection and portable ODB transfer
+
+`abaqus_mfsm_input.py` reads expanded global-coordinate S4R INPs, applies
+instance translation before rotation, resolves singleton BEAM node sets and
+assembles a sparse **initial** constraint matrix. Numeric homogeneous initial
+BCs or explicit BUCKLE `LOAD CASE=2, OP=NEW` BCs are supported. Unsupported
+MPCs, multiple-node pairing, transformed nodal axes, includes, additional
+constraint forms and general preload steps fail explicitly. It creates no
+contact tangent, shell stiffness or dense nullspace, and never marks active
+base-state equivalence as verified.
+
+```bat
+python abaqus_mfsm_input.py --inp "BU_BOLT_L3600_M20(1).inp" --output-dir "input_audit_new"
+```
+
+Requires NumPy/SciPy; writes `input_audit.json`, sparse `initial_constraints.npz`
+and `initial_dof_map.npz`. Uploaded actual input inspection is recorded in
+[docs/mfsm-actual-input-audit.json](docs/mfsm-actual-input-audit.json): 40,700 nodes,
+39,744 S4R elements, 76 BEAM MPCs, 1,777 constraint rows and 2,537 nonzeros.
+Contact is defined, but its active base-state tangent remains unknown. The ODB
+attachment failed transfer; no actual eigenmode was read on this host.
+
+To avoid transferring a large binary ODB, run the following **with Abaqus Python**
+on the machine containing Abaqus and the ODB. Supply actual absolute paths as
+needed; `modal_export_new` must be a new directory.
+
+```bat
+abaqus python abaqus_mfsm_export.py --odb "BU_BOLT_L3600_M20.odb" --inp "BU_BOLT_L3600_M20(1).inp" --output-dir "modal_export_new"
+```
+
+Send `modal_export.json`, `raw_dof_map.npz` and the `modes_*.npz` files from that
+directory. NumPy can read these without Abaqus/odbAccess. Default 8-mode shards
+reduce individual transfer size; `--modes-per-shard` changes transfer granularity,
+not memory reservation. Compression runs on all visible logical CPUs, while one
+thread owns ODB extraction; native field sequences are acquired once per mode.
+No lower RAM/VRAM percentage ceiling is introduced. Output is raw data, **not**
+an mFSM operator pack or validated classification.
+
+The exporter checks exact instance/node/element connectivity and source-coordinate
+agreement, reads global U and UR without zero fill, preserves negative eigenvalues
+and original precision metadata, and hashes input/ODB/output artifacts. FP64
+storage cannot recover precision lost in the original analysis. PRESELECT in an
+INP does not by itself prove missing UR: actual ODB fields must be inspected.
+Existing output directories are rejected; artifacts are staged and JSON committed
+last. Failed exports have no final manifest and must not be treated as complete.
+Actual Abaqus execution remains untested here; unit tests exercise synthetic ODB
+objects and failure paths. Physical S4R/contact operators and validation remain
+unfinished even after a successful raw-data export.
+
+The supported INP keyword subset is explicit: nonrectangular NODE coordinates,
+external data and unimplemented geometry-generation/transformation keywords are
+rejected. CAE's NSET INTERNAL flag is accepted as set metadata.
+Close the analysis/ODB writer before export. The CLI rejects an existing `.lck`
+file without deleting it, snapshots source hashes and file metadata, and checks
+both INP and ODB again before publication. Changed sources abort without a final
+manifest. This detects observed changes; it does not acquire an exclusive source
+lock. Topology agreement does not establish material/load/history equivalence.
+The in-memory test API has `source_stability_verified=false` unless a successful
+source guard is supplied; the CLI supplies this guard.
