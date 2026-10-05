@@ -1,6 +1,11 @@
 # Alireza-1
 This is for mode classification
 
+Fast Step-4 candidate screening now reads actual ODB mode shapes with the same
+`abaqus_step4_imperfections.py --run-dir "RUN" --suggest` command. See
+[fast screening and execution](README_fast_modal_suggest.md) for the method,
+CPU/GPU policy, cache, outputs and validation limits.
+
 See [mFSM status and operator contract](README_mfsm.md) and
 [full-resource execution](README_resource_execution.md). The new numerical backend
 requires supplied documented operators and physical validation before primary

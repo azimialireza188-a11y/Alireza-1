@@ -1,8 +1,12 @@
 # -*- coding: utf-8 -*-
 """STEP 4 ONLY: create a new CAE containing documented imperfect meshes.
 
-Suggestions (read existing step-3 reports; no CAE/solver needed):
+Suggestions (screen actual step-3 ODB shapes; no CAE/solver needed):
   abaqus python abaqus_step4_imperfections.py --run-dir "completed run" --suggest
+
+The default fast screen reads U and persisted physical walls, with geometric
+G/L/D candidates and separate relative-piece/QC diagnostics. --suggest-source csv
+retains the old report-only routine. See README_fast_modal_suggest.md.
 
 Build after YOU confirm mode IDs and amplitudes:
   abaqus cae noGUI=abaqus_step4_imperfections.py -- --run-dir "completed run"
@@ -49,6 +53,14 @@ import math
 import os
 import re
 import sys
+# For the standalone fast command, parallelize modes rather than nesting an
+# all-core BLAS team inside every worker. This runs before NumPy is loaded.
+if '--suggest' in sys.argv and not (
+        '--suggest-source=csv' in sys.argv or
+        any(a == '--suggest-source' and i+1 < len(sys.argv) and sys.argv[i+1] == 'csv'
+            for i,a in enumerate(sys.argv))):
+    from runtime_resources import configure_threads
+    configure_threads(1)
 import numpy as np
 
 DEFAULT_CASES = ('L_low', 'L_high', 'D', 'LD_pp', 'LD_pm', 'G1000', 'G3000')
@@ -71,7 +83,12 @@ def parse_arguments(argv=None):
         argv = clean
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--run-dir', required=True)
-    p.add_argument('--suggest', action='store_true', help='Report candidates only; never select a mode automatically')
+    p.add_argument('--suggest', action='store_true', help='Screen actual ODB mode shapes; never select a mode automatically')
+    p.add_argument('--suggest-source', choices=('odb', 'csv'), default='odb',
+                   help='odb: fresh geometric screening (default); csv: legacy report-only suggestions')
+    p.add_argument('--suggest-cpus', default='auto', help='auto uses all available logical CPUs')
+    p.add_argument('--suggest-gpus', default='auto', help='auto benchmarks supported CuPy GPUs against CPU')
+    p.add_argument('--suggest-refresh', action='store_true', help='Ignore the fast screening cache')
     p.add_argument('--source-cae', help='Override automatic discovery of the step-3 CAE')
     p.add_argument('--odb', help='Override automatic discovery of the step-3 ODB')
     p.add_argument('--model', help='Source model name; otherwise the unique four-shell-instance model')
@@ -90,6 +107,13 @@ def parse_arguments(argv=None):
     p.add_argument('--cases', default=','.join(DEFAULT_CASES))
     p.add_argument('--output-cae')
     args = p.parse_args(argv)
+    for name, minimum in (('suggest_cpus', 1), ('suggest_gpus', 0)):
+        value = getattr(args, name)
+        if value != 'auto':
+            try:
+                if int(value) < minimum: raise ValueError()
+            except ValueError:
+                p.error('--%s must be auto or an integer >= %d' % (name.replace('_','-'), minimum))
     args.run_dir = os.path.abspath(os.path.expanduser(args.run_dir))
     if not args.suggest:
         for name in ('local_mode', 'dist_mode', 'local_high_t', 'dist_mm', 'output_cae'):
@@ -429,7 +453,10 @@ def build(args):
 def main(argv=None):
     args = parse_arguments(argv)
     if args.suggest:
-        return suggest_modes(args.run_dir)
+        if args.suggest_source == 'csv':
+            return suggest_modes(args.run_dir)
+        from abaqus_fast_modal_suggest import suggest
+        return suggest(args)
     return build(args)
 
 
