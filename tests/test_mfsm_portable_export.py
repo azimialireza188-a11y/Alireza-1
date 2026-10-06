@@ -86,6 +86,33 @@ class PortableExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root,self.assertRaisesRegex(ValueError,'mode'):
             m.export_modal_data(odb,model,Path(root,'export'),'hash')
 
+    def test_bulk_data_blocks_bypass_slow_per_value_iteration(self):
+        m=self.module();model,odb=self.setup_odb()
+        for frame in odb.steps['Buckle'].frames:
+            converted={}
+            for field_name,field in frame.fieldOutputs.items():
+                groups={}
+                for value in field.values:
+                    groups.setdefault(value.instance.name,[]).append(value)
+                blocks=[]
+                for name,values in groups.items():
+                    blocks.append(NS(instance=odb.rootAssembly.instances[name],
+                        nodeLabels=[v.nodeLabel for v in values],
+                        data=[v.data for v in values],precision='SINGLE_PRECISION',
+                        orientationWidth=0,width=3))
+                class BulkOnlyField:
+                    def __init__(self,blocks):self.bulkDataBlocks=blocks
+                    @property
+                    def values(self):
+                        raise AssertionError('slow FieldValue path must not be touched when bulkDataBlocks exist')
+                converted[field_name]=BulkOnlyField(blocks)
+            frame.fieldOutputs=converted
+        with tempfile.TemporaryDirectory() as root:
+            result=m.export_modal_data(odb,model,Path(root,'export'),'hash',modes_per_shard=2)
+            self.assertEqual(result['mode_count'],3)
+            self.assertGreater(result['extraction_backend_counts']['bulk_fields'],0)
+            self.assertEqual(result['extraction_backend_counts']['value_fields'],0)
+
     def test_each_odb_field_value_sequence_is_retrieved_once(self):
         m=self.module();model,odb=self.setup_odb();watched=[]
         class Field:
