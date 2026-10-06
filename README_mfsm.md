@@ -258,10 +258,19 @@ abaqus python abaqus_mfsm_export.py --odb "BU_BOLT_L3600_M20.odb" --inp "BU_BOLT
 Send `modal_export.json`, `raw_dof_map.npz` and the `modes_*.npz` files from that
 directory. NumPy can read these without Abaqus/odbAccess. Default 8-mode shards
 reduce individual transfer size; `--modes-per-shard` changes transfer granularity,
-not memory reservation. Compression runs on all visible logical CPUs, while one
-thread owns ODB extraction; native field sequences are acquired once per mode.
-No lower RAM/VRAM percentage ceiling is introduced. Output is raw data, **not**
-an mFSM operator pack or validated classification.
+not memory reservation. The exporter now prefers Abaqus `FieldBulkData` blocks
+for U/UR extraction and builds the node-label mapping once for the entire run;
+the legacy per-`FieldValue` path is only a compatibility fallback. Shard
+compression is pipelined across all visible logical CPUs while one process owns
+the ODB handle. No lower RAM/VRAM percentage ceiling is introduced and allocation
+backoff occurs only after an actual `MemoryError`. Live progress reports the
+bulk/fallback counts, mode rate, ETA and pending compression work. Use
+`--compression store` when minimum local export wall time is more important than
+transfer size; the default `zlib` retains smaller upload artifacts. GPU execution
+is intentionally not used for native ODB I/O/ZIP compression because this stage
+has no supported GPU numerical kernel; GPU selection remains in the downstream
+mFSM numerical stages. Output is raw data, **not** an mFSM operator pack or
+validated classification.
 
 The exporter checks exact instance/node/element connectivity and source-coordinate
 agreement, reads global U and UR without zero fill, preserves negative eigenvalues
