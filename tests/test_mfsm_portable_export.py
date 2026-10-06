@@ -8,6 +8,15 @@ import numpy as np
 from tests.test_mfsm_inp_constraints import FIXTURE
 
 
+class NonIterableRepository(object):
+    """Abaqus-like Repository: keys/getitem/membership, but no direct iteration."""
+    def __init__(self,mapping):self._mapping=dict(mapping)
+    def keys(self):return list(self._mapping.keys())
+    def __getitem__(self,key):return self._mapping[key]
+    def __contains__(self,key):return key in self._mapping
+    def __iter__(self):raise TypeError("'abaqus.Repository' object is not iterable")
+
+
 class PortableExportTests(unittest.TestCase):
     def setup_odb(self):
         from abaqus_mfsm_input import read_input_text
@@ -28,6 +37,16 @@ class PortableExportTests(unittest.TestCase):
         self.assertIsNotNone(importlib.util.find_spec('abaqus_mfsm_export'), 'Portable ODB exporter missing')
         import abaqus_mfsm_export
         return abaqus_mfsm_export
+
+    def test_real_abaqus_noniterable_repositories_are_supported(self):
+        m=self.module();model,odb=self.setup_odb()
+        odb.rootAssembly.instances=NonIterableRepository(odb.rootAssembly.instances)
+        odb.steps=NonIterableRepository(odb.steps)
+        with tempfile.TemporaryDirectory() as root:
+            output=Path(root,'export')
+            result=m.export_modal_data(odb,model,output,'source-hash',modes_per_shard=2)
+            self.assertEqual(result['mode_count'],3)
+            self.assertTrue((output/'modal_export.json').exists())
 
     def test_exports_full_uur_shards_without_odb_runtime_on_reader(self):
         m=self.module();model,odb=self.setup_odb()
