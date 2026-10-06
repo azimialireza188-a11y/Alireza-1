@@ -42,7 +42,8 @@ def export_modal_data(odb,model,output_dir,odb_sha256,modes_per_shard=8,source_g
     from abaqus_dsm_modal_audit import read_mapped_mode
     if type(modes_per_shard) is not int or modes_per_shard<1 or not odb_sha256:
         raise ValueError('Positive shard size and source ODB hash required')
-    names={str(name).upper():name for name in odb.rootAssembly.instances}
+    # Abaqus odbAccess.Repository exposes keys()/getitem but is not directly iterable.
+    names={str(name).upper():name for name in odb.rootAssembly.instances.keys()}
     if set(names)!=set(model['instances']):raise ValueError('ODB/INP instances differ')
     coordinates=[];keys=[];node_keys=[]
     for name in model['instances']:
@@ -62,7 +63,7 @@ def export_modal_data(odb,model,output_dir,odb_sha256,modes_per_shard=8,source_g
     if len(model['steps'])!=1 or 'buckle_data' not in model['steps'][0]:
         raise ValueError('Exactly one source BUCKLE step required')
     step_name=model['steps'][0]['name']
-    matched=[name for name in odb.steps if str(name).upper()==step_name]
+    matched=[name for name in odb.steps.keys() if str(name).upper()==step_name]
     if len(matched)!=1:raise ValueError('ODB/INP buckling step mismatch')
     frames=[f for f in odb.steps[matched[0]].frames if int(getattr(f,'mode',0))>0]
     ids=[int(f.mode) for f in frames]
